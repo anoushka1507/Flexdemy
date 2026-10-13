@@ -18,12 +18,43 @@ const [password, setPassword] = useState('');
 const [showPassword, setShowPassword] = useState(false);
 const [error, setError] = useState('');
 const [loading, setLoading] = useState(false);
+const [mode, setMode] = useState<'login' | 'signup'>('login');
+const [signupMessage, setSignupMessage] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
   e.preventDefault();
 
   setError('');
+  setSignupMessage('');
   setLoading(true);
+
+  if (mode === 'signup') {
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setError(error.message);
+      return;
+    }
+
+    // A session means email confirmation is off and they're
+    // signed in immediately. Otherwise they need to confirm first.
+    if (data.session) {
+      setCurrentView('dashboard');
+    } else {
+      setSignupMessage(
+        'Account created! Check your email for a confirmation link, then log in.'
+      );
+      setMode('login');
+    }
+
+    return;
+  }
 
   const { error } = await supabase.auth.signInWithPassword({
     email,
@@ -141,9 +172,21 @@ const [loading, setLoading] = useState(false);
         {/* Right Side: Login Form Card */}
         <div className="w-full max-w-md mx-auto bg-white rounded-3xl p-8 shadow-xl border border-[#d8d7e8] text-left">
           <div className="mb-6">
-            <h2 className="text-2xl font-bold text-[#222138]">Welcome back!</h2>
-            <p className="text-xs text-gray-500 mt-1">Sign in to access your quizzes and track performance</p>
+            <h2 className="text-2xl font-bold text-[#222138]">
+              {mode === 'login' ? 'Welcome back!' : 'Create your account'}
+            </h2>
+            <p className="text-xs text-gray-500 mt-1">
+              {mode === 'login'
+                ? 'Sign in to access your quizzes and track performance'
+                : 'Sign up to start tracking your quizzes and mastery'}
+            </p>
           </div>
+
+          {signupMessage && (
+            <p className="text-sm text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-xl px-3 py-2 mb-4">
+              {signupMessage}
+            </p>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
@@ -169,9 +212,11 @@ const [loading, setLoading] = useState(false);
                 <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
                   Password
                 </label>
-                <a href="#forgot" className="text-xs text-[#7372A5] font-semibold hover:underline">
-                  Forgot password?
-                </a>
+                {mode === 'login' && (
+                  <a href="#forgot" className="text-xs text-[#7372A5] font-semibold hover:underline">
+                    Forgot password?
+                  </a>
+                )}
               </div>
               <div className="relative">
                 <span className="material-symbols-outlined absolute left-3 top-3 text-gray-400 text-lg">
@@ -204,9 +249,45 @@ const [loading, setLoading] = useState(false);
   disabled={loading}
   className="w-full py-3 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-sm shadow-md transition-all disabled:opacity-50"
 >
-  {loading ? 'Logging in...' : 'Log In'}
+  {loading
+    ? (mode === 'login' ? 'Logging in...' : 'Creating account...')
+    : (mode === 'login' ? 'Log In' : 'Create Account')}
 </button>
           </form>
+
+          <p className="text-center text-xs text-gray-500 mt-4">
+            {mode === 'login' ? (
+              <>
+                Don't have an account?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('signup');
+                    setError('');
+                    setSignupMessage('');
+                  }}
+                  className="text-[#7372A5] font-bold hover:underline"
+                >
+                  Sign up
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setError('');
+                    setSignupMessage('');
+                  }}
+                  className="text-[#7372A5] font-bold hover:underline"
+                >
+                  Log in
+                </button>
+              </>
+            )}
+          </p>
 
           <div className="relative my-6 text-center">
             <div className="absolute inset-0 flex items-center">
