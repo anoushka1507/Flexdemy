@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 
 export const MasteryPanel: React.FC = () => {
   const [mastery, setMastery] = useState<Record<string, number> | null>(null);
+  const [isNewStudent, setIsNewStudent] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -42,7 +43,10 @@ export const MasteryPanel: React.FC = () => {
         }
 
         const data = await response.json();
-        if (mounted) setMastery(data);
+        if (mounted) {
+          setMastery(data.topics || {});
+          setIsNewStudent(Boolean(data.is_new_student));
+        }
       } catch (err) {
         if (mounted) {
           setError(
@@ -85,10 +89,24 @@ export const MasteryPanel: React.FC = () => {
   if (topics.length === 0) {
     return (
       <div className="bg-white p-8 rounded-3xl border border-purple-100 shadow-xs">
-        <p className="text-xs text-gray-500">
-          No mastery data yet — complete an adaptive quiz while signed in to
-          start building your topic mastery profile.
-        </p>
+        {isNewStudent ? (
+          <>
+            <p className="text-xs font-bold text-[#7372A5] uppercase tracking-wider mb-1">
+              New here
+            </p>
+            <p className="text-xs text-gray-500">
+              You don't have a mastery profile yet. Your first adaptive quiz
+              works as a quick diagnostic — answers from it seed your
+              per-topic mastery scores, which then keep adapting with every
+              quiz and tutor chat after that.
+            </p>
+          </>
+        ) : (
+          <p className="text-xs text-gray-500">
+            No mastery data yet — complete an adaptive quiz while signed in to
+            start building your topic mastery profile.
+          </p>
+        )}
       </div>
     );
   }

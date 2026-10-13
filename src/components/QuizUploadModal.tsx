@@ -8,6 +8,14 @@ const QUESTION_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'numerical', label: 'Numerical' },
 ];
 
+interface ConceptDraft {
+  label: string;
+  description: string;
+  topic: string;
+  prerequisites: string[];
+  source_chunk_index: number;
+}
+
 interface QuizUploadModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -27,6 +35,13 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [questionTypes, setQuestionTypes] = useState<string[]>(['mcq']);
+
+  // Student-chosen quiz scope: preview extracted topics for the
+  // uploaded file, then let them narrow which ones get quizzed.
+  const [extractedConcepts, setExtractedConcepts] = useState<ConceptDraft[] | null>(null);
+  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [extractingTopics, setExtractingTopics] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
 
   const toggleQuestionType = (value: string) => {
     setQuestionTypes((prev) => {
@@ -48,11 +63,63 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
     setSelectedFile(file);
     setSelectedFileName(file.name);
 
+    // A new file invalidates any previous topic preview.
+    setExtractedConcepts(null);
+    setSelectedTopics([]);
+    setExtractError(null);
+
     if (!topic) {
       setTopic(file.name.replace(/\.[^/.]+$/, ''));
     }
   }
 };
+
+  const uniqueTopics = extractedConcepts
+    ? Array.from(new Set(extractedConcepts.map((c) => c.topic)))
+    : [];
+
+  const toggleTopic = (t: string) => {
+    setSelectedTopics((prev) =>
+      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+    );
+  };
+
+  const handlePreviewTopics = async () => {
+    if (!selectedFile) return;
+
+    setExtractingTopics(true);
+    setExtractError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      const response = await fetch('/api/extract-concepts', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Topic extraction failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const concepts: ConceptDraft[] = data.concepts || [];
+
+      if (concepts.length === 0) {
+        setExtractError('No topics could be extracted from this file.');
+        return;
+      }
+
+      setExtractedConcepts(concepts);
+      setSelectedTopics(Array.from(new Set(concepts.map((c) => c.topic))));
+    } catch (err) {
+      console.error('Topic extraction error:', err);
+      setExtractError('Could not extract topics. You can still start the quiz with everything included.');
+    } finally {
+      setExtractingTopics(false);
+    }
+  };
   const handleQuickTopic = (quickTopic: string) => {
     setTopic(quickTopic);
     setContent(`Sample study notes for ${quickTopic}`);
@@ -73,6 +140,11 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
     formData.append('file', selectedFile);
     formData.append('question_types', questionTypes.join(','));
+
+    if (extractedConcepts) {
+      formData.append('concept_drafts_json', JSON.stringify(extractedConcepts));
+      formData.append('selected_topics', selectedTopics.join(','));
+    }
 
     const difficultyValue = difficulty.toLowerCase();
 
@@ -117,6 +189,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
         questionType: data.question.question_type || 'mcq',
         topic: data.question.topic,
         sourceLocator: data.question.source_locator,
+        backendQuestion: data.question,
       },
     };
 
@@ -220,6 +293,62 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
             />
           </div>
 
+          {/* Student-Chosen Quiz Scope */}
+          {selectedFile && (
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  Quiz Scope
+                </label>
+                <button
+                  type="button"
+                  onClick={handlePreviewTopics}
+                  disabled={extractingTopics}
+                  className="text-xs font-semibold text-[#7372A5] hover:underline disabled:opacity-50"
+                >
+                  {extractingTopics
+                    ? 'Scanning material...'
+                    : extractedConcepts
+                      ? 'Rescan topics'
+                      : 'Preview topics in this file'}
+                </button>
+              </div>
+
+              {extractError && (
+                <p className="text-[11px] text-red-500 mb-1">{extractError}</p>
+              )}
+
+              {extractedConcepts && (
+                <div className="border border-[#d8d7e8] rounded-xl p-3 bg-[#f6f6fa]">
+                  <p className="text-[11px] text-gray-500 mb-2">
+                    Pick which topics the quiz should draw from. Unchecked topics are skipped.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {uniqueTopics.map((t) => (
+                      <button
+                        key={t}
+                        type="button"
+                        onClick={() => toggleTopic(t)}
+                        className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-all ${
+                          selectedTopics.includes(t)
+                            ? 'bg-[#7372A5] text-white font-bold shadow-sm'
+                            : 'bg-white text-[#7372A5] border border-[#d8d7e8]'
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                  {selectedTopics.length === 0 && (
+                    <p className="text-[11px] text-red-500 mt-2">
+                      Select at least one topic, or the full material will be used instead.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Difficulty and Question Count */}
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -279,7 +408,11 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
           <div className="pt-2">
             <button
               type="submit"
-              disabled={loading || (!topic && !content)}
+              disabled={
+                loading ||
+                (!topic && !content) ||
+                (extractedConcepts !== null && selectedTopics.length === 0)
+              }
               className="w-full py-3 px-4 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {loading ? (

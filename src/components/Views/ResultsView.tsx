@@ -1,6 +1,12 @@
 import React, { useState } from 'react';
 import { Quiz, QuizResult, ViewMode } from '../../types';
 
+const isAiQuestion = (q: { backendQuestion?: Record<string, unknown> }) =>
+  Boolean(q.backendQuestion);
+
+const isMcq = (q: { questionType?: string }) =>
+  !q.questionType || q.questionType === 'mcq';
+
 interface ResultsViewProps {
   quizResult: QuizResult;
   quiz: Quiz;
@@ -22,7 +28,112 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'review' | 'insights'>('review');
 
+  const [explanations, setExplanations] = useState<
+    Record<number, { text: string; sourceLocator: string; topic: string }>
+  >({});
+  const [explanationLoading, setExplanationLoading] = useState<Record<number, boolean>>({});
+  const [explanationError, setExplanationError] = useState<Record<number, string>>({});
+
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState('');
+
   const optionLetters = ['A', 'B', 'C', 'D'];
+
+  const fetchExplanation = async (
+    q: Quiz['questions'][number],
+    selectedOptionIndex: number
+  ) => {
+    if (!q.backendQuestion) return;
+
+    setExplanationLoading((prev) => ({ ...prev, [q.id]: true }));
+    setExplanationError((prev) => ({ ...prev, [q.id]: '' }));
+
+    try {
+      const response = await fetch('/api/explain-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: q.backendQuestion,
+          selected_option_index: selectedOptionIndex,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not generate an explanation.');
+      }
+
+      const data = await response.json();
+
+      setExplanations((prev) => ({
+        ...prev,
+        [q.id]: {
+          text: data.explanation,
+          sourceLocator: data.source_locator || '',
+          topic: data.topic || '',
+        },
+      }));
+    } catch (err) {
+      setExplanationError((prev) => ({
+        ...prev,
+        [q.id]: err instanceof Error ? err.message : 'Could not generate an explanation.',
+      }));
+    } finally {
+      setExplanationLoading((prev) => ({ ...prev, [q.id]: false }));
+    }
+  };
+
+  const fetchSummary = async () => {
+    if (summary || summaryLoading) return;
+
+    setSummaryLoading(true);
+    setSummaryError('');
+
+    try {
+      const concepts = quizResult.topicBreakdown.map((t) => ({
+        concept_label: t.topicName,
+        final_difficulty: (quiz.difficulty || 'medium').toLowerCase(),
+        accuracy: t.masteryPercentage / 100,
+        question_count: t.total,
+      }));
+
+      const weakestConceptLabels = [...quizResult.topicBreakdown]
+        .sort((a, b) => a.masteryPercentage - b.masteryPercentage)
+        .slice(0, 3)
+        .map((t) => t.topicName);
+
+      const response = await fetch('/api/quiz-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          report_data: {
+            concepts,
+            weakest_concept_labels: weakestConceptLabels,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not generate the performance report.');
+      }
+
+      const data = await response.json();
+      setSummary(data.summary);
+    } catch (err) {
+      setSummaryError(
+        err instanceof Error ? err.message : 'Could not generate the performance report.'
+      );
+    } finally {
+      setSummaryLoading(false);
+    }
+  };
+
+  const handleTabChange = (tab: 'review' | 'insights') => {
+    setActiveTab(tab);
+    if (tab === 'insights') {
+      fetchSummary();
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#f6f6fa] text-left">
@@ -75,7 +186,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
               Performance Hub
             </p>
             <button
-              onClick={() => setActiveTab('review')}
+              onClick={() => handleTabChange('review')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
                 activeTab === 'review'
                   ? 'bg-[#ececf4] text-[#7372A5]'
@@ -87,7 +198,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
             </button>
 
             <button
-              onClick={() => setActiveTab('insights')}
+              onClick={() => handleTabChange('insights')}
               className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
                 activeTab === 'insights'
                   ? 'bg-[#ececf4] text-[#7372A5]'
@@ -200,13 +311,20 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
           </div>
 
           {/* Question Review List */}
+          {activeTab === 'review' && (
           <div className="space-y-4">
             <h3 className="font-extrabold text-lg text-[#222138]">Question Review & Explanations</h3>
 
             <div className="space-y-4">
               {quiz.questions.map((q, idx) => {
                 const userSelected = quizResult.userAnswers[q.id];
-                const isCorrect = userSelected === q.correctAnswerIndex;
+
+                const openEndedResult = quizResult.openEndedResults?.[q.id];
+
+                const isCorrect =
+                  openEndedResult !== undefined
+                    ? openEndedResult
+                    : userSelected === q.correctAnswerIndex;
 
                 return (
                   <div
@@ -238,6 +356,12 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                         <span>{isCorrect ? 'Correct' : 'Incorrect'}</span>
                       </span>
                     </div>
+
+                    {!isMcq(q) && (
+                      <p className="text-xs text-gray-400 italic pt-2">
+                        Open-ended question — graded by the tutor during the quiz.
+                      </p>
+                    )}
 
                     {/* Options list */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
@@ -274,13 +398,105 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                       })}
                     </div>
 
-                   
+                    {isMcq(q) && !isCorrect && isAiQuestion(q) && (
+                      <div className="pt-2">
+                        {explanations[q.id] ? (
+                          <div className="text-xs text-gray-600 bg-[#f6f6fa] rounded-xl p-3 leading-relaxed">
+                            <p>{explanations[q.id].text}</p>
+                            {explanations[q.id].sourceLocator && (
+                              <p className="mt-2 text-[10px] font-bold text-[#7372A5] uppercase tracking-wider">
+                                Source: {explanations[q.id].sourceLocator}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() =>
+                              fetchExplanation(
+                                q,
+                                userSelected ?? 0
+                              )
+                            }
+                            disabled={explanationLoading[q.id]}
+                            className="text-xs font-bold text-[#7372A5] underline disabled:opacity-50"
+                          >
+                            {explanationLoading[q.id]
+                              ? 'Generating explanation...'
+                              : 'Get AI explanation'}
+                          </button>
+                        )}
+
+                        {explanationError[q.id] && (
+                          <p className="text-xs text-rose-600 mt-1">
+                            {explanationError[q.id]}
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                   </div>
                 );
               })}
             </div>
           </div>
+          )}
+
+          {/* Topic Mastery / AI Insights */}
+          {activeTab === 'insights' && (
+          <div className="space-y-4">
+            <h3 className="font-extrabold text-lg text-[#222138]">Topic Mastery</h3>
+
+            <div className="bg-white rounded-2xl p-6 border border-[#d8d7e8] shadow-xs space-y-4">
+              {quizResult.topicBreakdown
+                .slice()
+                .sort((a, b) => a.masteryPercentage - b.masteryPercentage)
+                .map((topic) => (
+                  <div key={topic.topicName} className="space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-[#222138]">{topic.topicName}</span>
+                      <span className="font-semibold text-gray-500">
+                        {topic.score}/{topic.total} · {topic.masteryPercentage}%
+                      </span>
+                    </div>
+                    <div className="w-full bg-[#ececf4] h-2.5 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all ${
+                          topic.masteryPercentage < 40
+                            ? 'bg-red-400'
+                            : topic.masteryPercentage < 75
+                            ? 'bg-amber-400'
+                            : 'bg-emerald-400'
+                        }`}
+                        style={{ width: `${topic.masteryPercentage}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            <div className="bg-white rounded-2xl p-6 border border-[#d8d7e8] shadow-xs space-y-2">
+              <h4 className="font-bold text-sm text-[#222138]">AI Performance Summary</h4>
+
+              {summaryLoading && (
+                <p className="text-xs text-gray-400">Analyzing your performance...</p>
+              )}
+
+              {summaryError && (
+                <p className="text-xs text-rose-600">{summaryError}</p>
+              )}
+
+              {summary && (
+                <p className="text-xs text-gray-600 leading-relaxed">{summary}</p>
+              )}
+
+              {!summary && !summaryLoading && !summaryError && (
+                <p className="text-xs text-gray-400">
+                  Switch to this tab to generate a summary of your weak topics and likely misconceptions.
+                </p>
+              )}
+            </div>
+          </div>
+          )}
 
         </div>
 

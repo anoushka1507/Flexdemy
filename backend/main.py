@@ -57,6 +57,7 @@ from AI_Layer.models import (
     ChatTurn,
     Chunk,
     Concept,
+    ConceptDraft,
     ConceptState,
     Difficulty,
     QuestionType,
@@ -615,6 +616,18 @@ async def start_adaptive_quiz(
     # Cycled round-robin across the quiz.
     question_types: str = Form("mcq"),
 
+    # Comma-separated topic names the student chose to be quizzed on
+    # (from a prior /extract-concepts preview). Empty = use everything
+    # extracted from the material, preserving the old behavior.
+    selected_topics: str = Form(""),
+
+    # Concept drafts already extracted by a prior /extract-concepts
+    # call on this same file, passed back as JSON so we don't re-run
+    # extraction (which would be wasteful and, since generation isn't
+    # fully deterministic, could silently drift from what the student
+    # actually saw and picked from).
+    concept_drafts_json: str = Form(""),
+
     authorization: str | None = Header(None),
 ):
 
@@ -625,6 +638,12 @@ async def start_adaptive_quiz(
         for t in question_types.split(",")
         if t.strip() in ("mcq", "short_answer", "numerical")
     ] or ["mcq"]
+
+    requested_topics = {
+        t.strip().lower()
+        for t in selected_topics.split(",")
+        if t.strip()
+    }
 
     from AI_Layer.ai_core import (
         extract_concepts,
@@ -664,14 +683,32 @@ async def start_adaptive_quiz(
 
 
         # ----------------------------------------------------
-        # Extract concepts.
+        # Extract concepts (reuse a prior preview's drafts if the
+        # frontend already called /extract-concepts for this file).
         # ----------------------------------------------------
 
-        concept_drafts = (
-            await extract_concepts(
-                chunks
+        if concept_drafts_json.strip():
+
+            import json as _json
+
+            try:
+                concept_drafts = [
+                    ConceptDraft(**d)
+                    for d in _json.loads(concept_drafts_json)
+                ]
+            except (ValueError, TypeError) as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid concept_drafts_json: {e}",
+                )
+
+        else:
+
+            concept_drafts = (
+                await extract_concepts(
+                    chunks
+                )
             )
-        )
 
 
         concepts = (
@@ -691,6 +728,24 @@ async def start_adaptive_quiz(
                     "could be extracted."
                 ),
             )
+
+
+        # ----------------------------------------------------
+        # Narrow to the student-chosen topics, if any were given.
+        # Falls back to the full set if the filter would otherwise
+        # wipe out every concept (e.g. a stale/mismatched selection),
+        # so a demo never hard-fails on this.
+        # ----------------------------------------------------
+
+        if requested_topics:
+
+            narrowed = [
+                c for c in concepts
+                if c.topic.strip().lower() in requested_topics
+            ]
+
+            if narrowed:
+                concepts = narrowed
 
 
         # ----------------------------------------------------
@@ -1241,6 +1296,7 @@ class GroundedChatRequest(BaseModel):
 @app.post("/grounded-chat")
 async def grounded_chat_api(
     request: GroundedChatRequest,
+    authorization: str | None = Header(None),
 ):
 
     from AI_Layer.ai_core import (
@@ -1270,6 +1326,44 @@ async def grounded_chat_api(
         request.message,
     )
 
+    # --------------------------------------------------------
+    # Weak-signal mastery nudge: a grounded (non-refused) answer
+    # is evidence the student is engaging with a topic, but it is
+    # NOT a graded answer — so it moves the score by a much smaller
+    # step than a quiz answer does (best-effort, never blocks the
+    # chat response).
+    # --------------------------------------------------------
+
+    if response.is_grounded and response.citations:
+
+        session = adaptive_sessions.get(request.session_id)
+
+        if session is not None:
+
+            cited_locators = {
+                c.locator for c in response.citations
+            }
+
+            topic = next(
+                (
+                    concept.topic
+                    for concept in session.concepts
+                    if cited_locators & set(concept.locators)
+                ),
+                None,
+            )
+
+            if topic:
+
+                sb_client = get_user_client(authorization)
+
+                await upsert_mastery(
+                    sb_client,
+                    topic,
+                    is_correct=True,
+                    learning_rate=0.05,
+                )
+
     return response.model_dump()
 
 
@@ -1290,7 +1384,15 @@ async def mastery_api(
             detail="Sign in to view your mastery profile.",
         )
 
-    return await fetch_mastery(sb_client)
+    mastery = await fetch_mastery(sb_client)
+
+    return {
+        "topics": mastery,
+        # No mastery rows yet = this learner has no quiz/chat history
+        # at all. The frontend uses this to offer a diagnostic-quiz
+        # framing instead of silently defaulting every score to 0.3.
+        "is_new_student": len(mastery) == 0,
+    }
 
 
 # ============================================================
@@ -1317,7 +1419,11 @@ async def explain_answer_api(
         request.selected_option_index,
     )
 
-    return {"explanation": explanation}
+    return {
+        "explanation": explanation,
+        "source_locator": question.source_locator,
+        "topic": question.topic,
+    }
 
 
 class QuizSummaryRequest(BaseModel):

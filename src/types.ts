@@ -32,6 +32,11 @@ export interface Question {
   questionType?: QuestionType;
   topic?: string;
   sourceLocator?: string;
+
+  // Full backend option objects (text/is_correct/misconception_tag),
+  // kept around so /explain-answer can use the real misconception tags
+  // instead of a generic fallback. Only present for AI-generated questions.
+  backendQuestion?: Record<string, unknown>;
 }
 
 export interface Citation {
@@ -81,6 +86,11 @@ export interface QuizResult {
   timeSpentSeconds: number;
   dateCompleted: string;
   userAnswers: Record<number, number | null>;
+
+  // Correctness for short-answer/numerical questions, which aren't
+  // scored by option index. Falls back to userAnswers comparison when
+  // a question id isn't present here (i.e. it was an MCQ question).
+  openEndedResults?: Record<number, boolean>;
 
   topicBreakdown: Array<{
     topicName: string;

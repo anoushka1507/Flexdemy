@@ -569,6 +569,9 @@ export const ActiveQuizView: React.FC<
       userAnswers:
         selectedAnswers,
 
+      openEndedResults:
+        answeredCorrectly,
+
       topicBreakdown,
     };
 
@@ -810,6 +813,8 @@ export const ActiveQuizView: React.FC<
 
           sourceLocator:
             raw.source_locator,
+
+          backendQuestion: raw,
         };
 
         setSelectedAnswers(
@@ -973,6 +978,7 @@ export const ActiveQuizView: React.FC<
           questionType: raw.question_type || 'mcq',
           topic: raw.topic,
           sourceLocator: raw.source_locator,
+          backendQuestion: raw,
         };
 
         setOpenAnswers((prev) => {

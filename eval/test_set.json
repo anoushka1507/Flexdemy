@@ -2,47 +2,47 @@
   {
     "question": "What caused the Ariane 5 rocket failure?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 1"]
   },
   {
     "question": "Why did the Patriot Missile system fail in Dhahran, Saudi Arabia?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 1"]
   },
   {
     "question": "What is the Y2K problem?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 1"]
   },
   {
     "question": "According to the Standish Group CHAOS research, what percentage of software projects succeeded?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 1"]
   },
   {
     "question": "What does 'No Silver Bullet' mean in the context of software engineering?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 1"]
   },
   {
     "question": "How is software productivity typically measured?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 2"]
   },
   {
     "question": "What is the difference between a generic and a bespoke software product?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 1", "Section 2"]
   },
   {
     "question": "What happened with the Space Shuttle's fuel management software?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 1"]
   },
   {
     "question": "What is the difference between a process metric and a product metric?",
     "is_answerable": true,
-    "expected_locator": "Document"
+    "expected_locator": ["Section 2"]
   },
   {
     "question": "Who wrote Romeo and Juliet?",
