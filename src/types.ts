@@ -39,10 +39,13 @@ export interface Question {
   backendQuestion?: Record<string, unknown>;
 }
 
+export type SourceType = 'pdf' | 'slide' | 'video' | 'text';
+
 export interface Citation {
   chunkIndex: number;
   locator: string;
   excerpt: string;
+  sourceType: SourceType;
 }
 
 export interface GroundedChatMessage {

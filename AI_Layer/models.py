@@ -289,6 +289,7 @@ class Citation(BaseModel):
     chunk_index: int
     locator: str
     excerpt: str
+    source_type: SourceType = "text"
 
 
 class GroundedChatResponse(BaseModel):
