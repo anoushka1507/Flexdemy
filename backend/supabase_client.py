@@ -16,6 +16,19 @@ SUPABASE_ANON_KEY = (
 )
 
 
+def get_anon_client() -> Client | None:
+    """
+    Unscoped client (no user JWT) for state that isn't tied to a
+    logged-in user — quiz sessions are addressed purely by their
+    session_id, same as the in-memory dict they replace.
+    """
+
+    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+        return None
+
+    return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
+
 def get_user_client(authorization_header: str | None) -> Client | None:
     """
     Build a Supabase client scoped to the requesting user via their
@@ -157,3 +170,138 @@ async def record_asked_question(
 
     except Exception as e:
         logger.warning("record_asked_question failed: %s", e)
+
+
+# ============================================================
+# QUIZ SESSION PERSISTENCE (survives serverless cold starts)
+# ============================================================
+
+async def save_quiz_session_data(
+    session_id: str,
+    session_json: dict,
+) -> None:
+
+    client = get_anon_client()
+
+    if client is None:
+        return
+
+    try:
+        client.table("quiz_sessions").upsert(
+            {
+                "session_id": session_id,
+                "session_data": session_json,
+            },
+            on_conflict="session_id",
+        ).execute()
+
+    except Exception as e:
+        logger.warning("save_quiz_session_data failed: %s", e)
+
+
+async def load_quiz_session_data(session_id: str) -> dict | None:
+
+    client = get_anon_client()
+
+    if client is None:
+        return None
+
+    try:
+        result = client.table("quiz_sessions").select(
+            "session_data"
+        ).eq("session_id", session_id).limit(1).execute()
+
+        rows = result.data or []
+
+        if not rows or rows[0].get("session_data") is None:
+            return None
+
+        return rows[0]["session_data"]
+
+    except Exception as e:
+        logger.warning("load_quiz_session_data failed: %s", e)
+        return None
+
+
+async def save_quiz_material_data(
+    session_id: str,
+    chunks_json: list[dict],
+    embeddings_json: list | None,
+    raw_bytes: bytes | None,
+    content_type: str,
+    filename: str,
+) -> None:
+
+    client = get_anon_client()
+
+    if client is None:
+        return
+
+    try:
+        import base64
+
+        payload = {
+            "session_id": session_id,
+            "material_chunks": chunks_json,
+            "material_embeddings": embeddings_json,
+            "material_content_type": content_type,
+            "material_filename": filename,
+        }
+
+        if raw_bytes is not None:
+            payload["material_raw_file_b64"] = base64.b64encode(
+                raw_bytes
+            ).decode("ascii")
+
+        client.table("quiz_sessions").upsert(
+            payload,
+            on_conflict="session_id",
+        ).execute()
+
+    except Exception as e:
+        logger.warning("save_quiz_material_data failed: %s", e)
+
+
+async def load_quiz_material_data(session_id: str) -> dict | None:
+
+    client = get_anon_client()
+
+    if client is None:
+        return None
+
+    try:
+        result = client.table("quiz_sessions").select(
+            "material_chunks, material_embeddings, "
+            "material_raw_file_b64, material_content_type, "
+            "material_filename"
+        ).eq("session_id", session_id).limit(1).execute()
+
+        rows = result.data or []
+
+        if not rows or rows[0].get("material_chunks") is None:
+            return None
+
+        row = rows[0]
+
+        import base64
+
+        raw_bytes = (
+            base64.b64decode(row["material_raw_file_b64"])
+            if row.get("material_raw_file_b64")
+            else None
+        )
+
+        return {
+            "chunks": row["material_chunks"],
+            "embeddings": row.get("material_embeddings"),
+            "raw_bytes": raw_bytes,
+            "content_type": (
+                row.get("material_content_type")
+                or "application/octet-stream"
+            ),
+            "filename": row.get("material_filename") or "material",
+        }
+
+    except Exception as e:
+        logger.warning("load_quiz_material_data failed: %s", e)
+        return None

@@ -68,7 +68,11 @@ from backend.supabase_client import (
     fetch_asked_question_texts,
     fetch_mastery,
     get_user_client,
+    load_quiz_material_data,
+    load_quiz_session_data,
     record_asked_question,
+    save_quiz_material_data,
+    save_quiz_session_data,
     upsert_mastery,
 )
 
@@ -109,6 +113,94 @@ materials: dict[
     str,
     dict,
 ] = {}
+
+
+# ============================================================
+# SESSION / MATERIAL PERSISTENCE (cache-aside over Supabase)
+#
+# This backend runs as Vercel serverless functions, which don't
+# share in-process memory across invocations. The dicts above are
+# a fast in-process cache; Supabase is the durable backing store so
+# a redeploy or a request landing on a different instance doesn't
+# lose an in-progress quiz. Best-effort: if Supabase isn't
+# configured, this silently degrades back to in-memory-only
+# behavior (matches every other persistence call in this file).
+# ============================================================
+
+async def get_session(session_id: str) -> AdaptiveSession | None:
+
+    session = adaptive_sessions.get(session_id)
+
+    if session is not None:
+        return session
+
+    data = await load_quiz_session_data(session_id)
+
+    if data is None:
+        return None
+
+    try:
+        session = AdaptiveSession.model_validate(data)
+    except Exception as e:
+        print("Failed to restore session from Supabase:", repr(e))
+        return None
+
+    adaptive_sessions[session_id] = session
+
+    return session
+
+
+async def save_session(session: AdaptiveSession) -> None:
+
+    adaptive_sessions[session.session_id] = session
+
+    await save_quiz_session_data(
+        session.session_id,
+        session.model_dump(mode="json"),
+    )
+
+
+async def get_material(session_id: str) -> dict | None:
+
+    material = materials.get(session_id)
+
+    if material is not None:
+        return material
+
+    data = await load_quiz_material_data(session_id)
+
+    if data is None:
+        return None
+
+    try:
+        data["chunks"] = [
+            Chunk.model_validate(c) for c in data["chunks"]
+        ]
+    except Exception as e:
+        print("Failed to restore material from Supabase:", repr(e))
+        return None
+
+    materials[session_id] = data
+
+    return data
+
+
+async def save_material(session_id: str, material: dict) -> None:
+
+    materials[session_id] = material
+
+    await save_quiz_material_data(
+        session_id,
+        chunks_json=[
+            c.model_dump(mode="json") for c in material["chunks"]
+        ],
+        embeddings_json=material.get("embeddings"),
+        raw_bytes=material.get("raw_bytes"),
+        content_type=material.get(
+            "content_type", "application/octet-stream"
+        ),
+        filename=material.get("filename", "material"),
+    )
 
 
 # ============================================================
@@ -797,13 +889,16 @@ async def start_adaptive_quiz(
             session_id
         ] = session
 
-        materials[session_id] = {
-            "chunks": chunks,
-            "embeddings": None,
-            "raw_bytes": raw_bytes,
-            "content_type": file.content_type or "application/octet-stream",
-            "filename": file.filename or "material",
-        }
+        await save_material(
+            session_id,
+            {
+                "chunks": chunks,
+                "embeddings": None,
+                "raw_bytes": raw_bytes,
+                "content_type": file.content_type or "application/octet-stream",
+                "filename": file.filename or "material",
+            },
+        )
 
 
         # ----------------------------------------------------
@@ -819,6 +914,10 @@ async def start_adaptive_quiz(
             sb_client=sb_client,
             question_types=requested_types,
         )
+
+        # Save AFTER Q1 is generated so the persisted session
+        # already has current_question/current_concept_label set.
+        await save_session(session)
 
 
         return {
@@ -1009,6 +1108,8 @@ async def record_answer_and_advance(
         if extra_fields:
             response.update(extra_fields)
 
+        await save_session(session)
+
         return response
 
     # --------------------------------------------------------
@@ -1103,6 +1204,8 @@ async def record_answer_and_advance(
     if extra_fields:
         response.update(extra_fields)
 
+    await save_session(session)
+
     return response
 
 
@@ -1118,7 +1221,7 @@ async def answer_adaptive_question(
 
     sb_client = get_user_client(authorization)
 
-    session = adaptive_sessions.get(
+    session = await get_session(
         request.session_id
     )
 
@@ -1234,7 +1337,7 @@ async def answer_adaptive_question_open(
 
     sb_client = get_user_client(authorization)
 
-    session = adaptive_sessions.get(
+    session = await get_session(
         request.session_id
     )
 
@@ -1314,7 +1417,7 @@ async def grounded_chat_api(
         embed_texts,
     )
 
-    material = materials.get(request.session_id)
+    material = await get_material(request.session_id)
 
     if material is None:
         raise HTTPException(
@@ -1328,6 +1431,7 @@ async def grounded_chat_api(
         material["embeddings"] = await embed_texts(
             [chunk.text for chunk in chunks]
         )
+        await save_material(request.session_id, material)
 
     response = await answer_grounded_question(
         chunks,
@@ -1346,7 +1450,7 @@ async def grounded_chat_api(
 
     if response.is_grounded and response.citations:
 
-        session = adaptive_sessions.get(request.session_id)
+        session = await get_session(request.session_id)
 
         if session is not None:
 
@@ -1384,9 +1488,9 @@ async def grounded_chat_api(
 @app.get("/materials/{session_id}/file")
 async def material_file_api(session_id: str):
 
-    material = materials.get(session_id)
+    material = await get_material(session_id)
 
-    if material is None or "raw_bytes" not in material:
+    if material is None or not material.get("raw_bytes"):
         raise HTTPException(
             status_code=404,
             detail="No source file found for this session.",
