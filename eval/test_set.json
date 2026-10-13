@@ -1,0 +1,67 @@
+[
+  {
+    "question": "What caused the Ariane 5 rocket failure?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "Why did the Patriot Missile system fail in Dhahran, Saudi Arabia?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "What is the Y2K problem?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "According to the Standish Group CHAOS research, what percentage of software projects succeeded?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "What does 'No Silver Bullet' mean in the context of software engineering?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "How is software productivity typically measured?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "What is the difference between a generic and a bespoke software product?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "What happened with the Space Shuttle's fuel management software?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "What is the difference between a process metric and a product metric?",
+    "is_answerable": true,
+    "expected_locator": "Document"
+  },
+  {
+    "question": "Who wrote Romeo and Juliet?",
+    "is_answerable": false,
+    "expected_locator": null
+  },
+  {
+    "question": "What is the boiling point of water at sea level?",
+    "is_answerable": false,
+    "expected_locator": null
+  },
+  {
+    "question": "Explain how a neural network's backpropagation algorithm works.",
+    "is_answerable": false,
+    "expected_locator": null
+  },
+  {
+    "question": "What year did India gain independence?",
+    "is_answerable": false,
+    "expected_locator": null
+  }
+]

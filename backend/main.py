@@ -2,6 +2,7 @@ from fastapi import (
     FastAPI,
     UploadFile,
     File,
+    Header,
     HTTPException,
     Form,
 )
@@ -53,9 +54,20 @@ if AI_LAYER_PATH not in sys.path:
 from AI_Layer.models import (
     AdaptiveQuizAnswerRequest,
     AdaptiveSession,
+    ChatTurn,
+    Chunk,
     Concept,
     ConceptState,
     Difficulty,
+    QuestionType,
+)
+
+from backend.supabase_client import (
+    fetch_asked_question_texts,
+    fetch_mastery,
+    get_user_client,
+    record_asked_question,
+    upsert_mastery,
 )
 
 
@@ -85,6 +97,15 @@ app.add_middleware(
 adaptive_sessions: dict[
     str,
     AdaptiveSession,
+] = {}
+
+
+# Keyed by session_id. Holds the raw chunks (+ lazily computed
+# embeddings) behind a material so the grounded tutor chat can
+# retrieve from it after the quiz has started.
+materials: dict[
+    str,
+    dict,
 ] = {}
 
 
@@ -267,6 +288,8 @@ def get_previous_question_texts(
 
 async def generate_next_question(
     session: AdaptiveSession,
+    sb_client=None,
+    question_types: list[str] | None = None,
 ):
 
     from AI_Layer.ai_core import (
@@ -283,7 +306,7 @@ async def generate_next_question(
     )
 
 
-    
+
 
 
     # --------------------------------------------------------
@@ -295,7 +318,8 @@ async def generate_next_question(
 
     # --------------------------------------------------------
     # 3. Give Gemini previous questions so it avoids
-    # duplicates.
+    # duplicates, including questions asked in EARLIER
+    # assessments (not just this session).
     # --------------------------------------------------------
 
     previous_questions = (
@@ -303,6 +327,28 @@ async def generate_next_question(
             session
         )
     )
+
+    cross_session_questions = (
+        await fetch_asked_question_texts(
+            sb_client,
+            concept.topic,
+        )
+    )
+
+    previous_questions = (
+        previous_questions + cross_session_questions
+    )
+
+
+    # --------------------------------------------------------
+    # 3b. Round-robin through the requested question types.
+    # --------------------------------------------------------
+
+    question_types = question_types or ["mcq"]
+
+    question_type = question_types[
+        session.questions_asked % len(question_types)
+    ]
 
 
     question = await generate_validated_question(
@@ -312,6 +358,14 @@ async def generate_next_question(
         difficulty=difficulty,
 
         previous_questions=previous_questions,
+
+        question_type=question_type,
+    )
+
+    await record_asked_question(
+        sb_client,
+        concept.topic,
+        question.question_text,
     )
 
 
@@ -373,9 +427,24 @@ async def generate_next_question(
 # READ UPLOADED MATERIAL
 # ============================================================
 
+VIDEO_EXTENSIONS = (
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".mkv",
+)
+
+VIDEO_MIME_BY_EXT = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mkv": "video/x-matroska",
+}
+
+
 async def read_uploaded_material(
     file: UploadFile,
-):
+) -> list[Chunk]:
 
     file_bytes = await file.read()
 
@@ -406,7 +475,36 @@ async def read_uploaded_material(
         from AI_Layer.ai_core import extract_text_and_chunk
 
         return extract_text_and_chunk(
-            text
+            text,
+            file.filename or "",
+        )
+
+
+    if filename.endswith(".pptx"):
+
+        from AI_Layer.ai_core import extract_slide_deck
+
+        return extract_slide_deck(
+            file_bytes,
+            file.filename or "",
+        )
+
+
+    if filename.endswith(VIDEO_EXTENSIONS) or (
+        file.content_type or ""
+    ).startswith("video/"):
+
+        from AI_Layer.ai_core import extract_video
+
+        ext = next(
+            (e for e in VIDEO_EXTENSIONS if filename.endswith(e)),
+            ".mp4",
+        )
+
+        return await extract_video(
+            file_bytes,
+            mime_type=VIDEO_MIME_BY_EXT.get(ext, "video/mp4"),
+            source_filename=file.filename or "",
         )
 
 
@@ -415,7 +513,8 @@ async def read_uploaded_material(
     )
 
     return await extract_and_chunk(
-        file_bytes
+        file_bytes,
+        file.filename or "",
     )
 
 
@@ -511,7 +610,21 @@ async def start_adaptive_quiz(
     difficulty: Difficulty = "medium",
 
     question_count: int = 10,
+
+    # Comma-separated, e.g. "mcq,short_answer,numerical".
+    # Cycled round-robin across the quiz.
+    question_types: str = Form("mcq"),
+
+    authorization: str | None = Header(None),
 ):
+
+    sb_client = get_user_client(authorization)
+
+    requested_types = [
+        t.strip()
+        for t in question_types.split(",")
+        if t.strip() in ("mcq", "short_answer", "numerical")
+    ] or ["mcq"]
 
     from AI_Layer.ai_core import (
         extract_concepts,
@@ -563,7 +676,8 @@ async def start_adaptive_quiz(
 
         concepts = (
             await deduplicate_concepts(
-                concept_drafts
+                concept_drafts,
+                chunks,
             )
         )
 
@@ -613,12 +727,18 @@ async def start_adaptive_quiz(
             streak_count=0,
             concepts=concepts,
             concept_states=concept_states,
+            question_types=requested_types,
         )
 
 
         adaptive_sessions[
             session_id
         ] = session
+
+        materials[session_id] = {
+            "chunks": chunks,
+            "embeddings": None,
+        }
 
 
         # ----------------------------------------------------
@@ -630,7 +750,9 @@ async def start_adaptive_quiz(
             question,
             question_number,
         ) = await generate_next_question(
-            session
+            session,
+            sb_client=sb_client,
+            question_types=requested_types,
         )
 
 
@@ -686,13 +808,250 @@ async def start_adaptive_quiz(
 
 
 # ============================================================
+# SHARED: RECORD ANSWER, ADVANCE SESSION, PERSIST MASTERY
+# ============================================================
+
+async def record_answer_and_advance(
+    session: AdaptiveSession,
+    request_question_number: int,
+    concept_label: str,
+    was_correct: bool,
+    sb_client=None,
+    extra_fields: dict | None = None,
+):
+
+    # --------------------------------------------------------
+    # Update performance for the answered concept.
+    # Difficulty and streak are GLOBAL to the quiz.
+    # --------------------------------------------------------
+
+    state = session.concept_states[
+        concept_label
+    ]
+
+    state = update_concept_performance(
+        state,
+        was_correct,
+    )
+
+    # --------------------------------------------------------
+    # GLOBAL ADAPTIVE STREAK
+    # --------------------------------------------------------
+
+    difficulty_before = (
+        session.current_difficulty
+    )
+
+    direction = (
+        "correct"
+        if was_correct
+        else "incorrect"
+    )
+
+    if session.streak_direction != direction:
+
+        session.streak_direction = direction
+        session.streak_count = 1
+
+    else:
+
+        session.streak_count += 1
+
+    if (
+        was_correct
+        and session.streak_count == 2
+    ):
+
+        session.current_difficulty = (
+            clamp_difficulty(
+                session.current_difficulty,
+                +1,
+            )
+        )
+
+        session.streak_count = 0
+        session.streak_direction = ""
+
+    elif (
+        not was_correct
+        and session.streak_count == 2
+    ):
+
+        session.current_difficulty = (
+            clamp_difficulty(
+                session.current_difficulty,
+                -1,
+            )
+        )
+
+        session.streak_count = 0
+        session.streak_direction = ""
+
+    difficulty_after = (
+        session.current_difficulty
+    )
+
+    # --------------------------------------------------------
+    # Persist per-topic mastery (best-effort; no-op if the
+    # caller isn't authenticated or Supabase isn't configured).
+    # --------------------------------------------------------
+
+    topic = next(
+        (
+            concept.topic
+            for concept in session.concepts
+            if concept.label == concept_label
+        ),
+        concept_label,
+    )
+
+    await upsert_mastery(
+        sb_client,
+        topic,
+        was_correct,
+    )
+
+    # --------------------------------------------------------
+    # QUIZ COMPLETE
+    # --------------------------------------------------------
+
+    if (
+        session.questions_asked
+        >= session.total_questions
+    ):
+
+        session.current_question = None
+        session.current_concept_label = None
+        session.current_question_number = None
+
+        response = {
+            "session_id": session.session_id,
+            "completed": True,
+            "question_number": request_question_number,
+            "total_questions": session.total_questions,
+            "was_correct": was_correct,
+            "answered_concept": concept_label,
+            "answered_difficulty": difficulty_before,
+            "new_difficulty": difficulty_after,
+            "streak_direction": session.streak_direction,
+            "streak_count": session.streak_count,
+            "next_question_number": None,
+            "next_concept": None,
+            "next_difficulty": None,
+            "question": None,
+        }
+
+        if extra_fields:
+            response.update(extra_fields)
+
+        return response
+
+    # --------------------------------------------------------
+    # Generate next question.
+    # --------------------------------------------------------
+
+    try:
+
+        (
+            next_concept,
+            next_question,
+            next_question_number,
+        ) = await generate_next_question(
+            session,
+            sb_client=sb_client,
+            question_types=session.question_types,
+        )
+
+    except Exception as e:
+
+        print(
+            "Next adaptive question error:",
+            repr(e),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "The answer was recorded, but "
+                "the next question could not "
+                f"be generated: {e}"
+            ),
+        )
+
+    response = {
+
+        "session_id": (
+            session.session_id
+        ),
+
+        "completed": False,
+
+        "question_number": (
+            request_question_number
+        ),
+
+        "total_questions": (
+            session.total_questions
+        ),
+
+        "was_correct": (
+            was_correct
+        ),
+
+        "answered_concept": (
+            concept_label
+        ),
+
+        "answered_difficulty": (
+            difficulty_before
+        ),
+
+        "new_difficulty": (
+            difficulty_after
+        ),
+
+        "streak_direction": (
+            session.streak_direction
+        ),
+
+        "streak_count": (
+            session.streak_count
+        ),
+
+        "next_question_number": (
+            next_question_number
+        ),
+
+        "next_concept": (
+            next_concept.label
+        ),
+
+        "next_difficulty": (
+            session.current_difficulty
+        ),
+
+        "question": (
+            next_question.model_dump()
+        ),
+    }
+
+    if extra_fields:
+        response.update(extra_fields)
+
+    return response
+
+
+# ============================================================
 # ANSWER ADAPTIVE QUESTION
 # ============================================================
 
 @app.post("/answer-adaptive-question")
 async def answer_adaptive_question(
     request: AdaptiveQuizAnswerRequest,
+    authorization: str | None = Header(None),
 ):
+
+    sb_client = get_user_client(authorization)
 
     session = adaptive_sessions.get(
         request.session_id
@@ -783,216 +1142,201 @@ async def answer_adaptive_question(
     )
 
 
-    # --------------------------------------------------------
-# Update performance for the answered concept.
-# Difficulty and streak are GLOBAL to the quiz.
-# --------------------------------------------------------
-
-    state = session.concept_states[
-        concept_label
-    ]
-
-    state = update_concept_performance(
-        state,
+    return await record_answer_and_advance(
+        session,
+        request.question_number,
+        concept_label,
         was_correct,
+        sb_client,
     )
 
-    # --------------------------------------------------------
-    # GLOBAL ADAPTIVE STREAK
-    # --------------------------------------------------------
 
-    difficulty_before = (
-        session.current_difficulty
+# ============================================================
+# ANSWER ADAPTIVE QUESTION (short-answer / numerical)
+# ============================================================
+
+class OpenAnswerRequest(BaseModel):
+    session_id: str
+    question_number: int
+    student_answer: str
+
+
+@app.post("/answer-adaptive-question-open")
+async def answer_adaptive_question_open(
+    request: OpenAnswerRequest,
+    authorization: str | None = Header(None),
+):
+
+    sb_client = get_user_client(authorization)
+
+    session = adaptive_sessions.get(
+        request.session_id
     )
 
-    direction = (
-        "correct"
-        if was_correct
-        else "incorrect"
-    )
-
-    # If the answer direction changed, start a new streak.
-    if session.streak_direction != direction:
-
-        session.streak_direction = direction
-        session.streak_count = 1
-
-    else:
-
-        session.streak_count += 1
-
-
-    # --------------------------------------------------------
-    # TWO CONSECUTIVE CORRECT ANSWERS
-    # --------------------------------------------------------
-
-    if (
-        was_correct
-        and session.streak_count == 2
-    ):
-
-        session.current_difficulty = (
-            clamp_difficulty(
-                session.current_difficulty,
-                +1,
-            )
-        )
-
-        session.streak_count = 0
-        session.streak_direction = ""
-
-
-    # --------------------------------------------------------
-    # TWO CONSECUTIVE INCORRECT ANSWERS
-    # --------------------------------------------------------
-
-    elif (
-        not was_correct
-        and session.streak_count == 2
-    ):
-
-        session.current_difficulty = (
-            clamp_difficulty(
-                session.current_difficulty,
-                -1,
-            )
-        )
-
-        session.streak_count = 0
-        session.streak_direction = ""
-
-
-    difficulty_after = (
-        session.current_difficulty
-    )
-
-    # --------------------------------------------------------
-    # QUIZ COMPLETE
-    # --------------------------------------------------------
-
-    if (
-        session.questions_asked
-        >= session.total_questions
-    ):
-
-        session.current_question = None
-        session.current_concept_label = None
-        session.current_question_number = None
-
-        return {
-            "session_id": session.session_id,
-            "completed": True,
-            "question_number": request.question_number,
-            "total_questions": session.total_questions,
-            "was_correct": was_correct,
-            "answered_concept": concept_label,
-            "answered_difficulty": difficulty_before,
-            "new_difficulty": difficulty_after,
-            "streak_direction": session.streak_direction,
-            "streak_count": session.streak_count,
-            "next_question_number": None,
-            "next_concept": None,
-            "next_difficulty": None,
-            "question": None,
-        }
-
-    # --------------------------------------------------------
-    # Generate next question.
-    # --------------------------------------------------------
-
-    try:
-
-        (
-            next_concept,
-            next_question,
-            next_question_number,
-        ) = await generate_next_question(
-            session
-        )
-
-    except Exception as e:
-
-        print(
-            "Next adaptive question error:",
-            repr(e),
-        )
-
+    if session is None:
         raise HTTPException(
-            status_code=500,
+            status_code=404,
+            detail="Adaptive quiz session not found.",
+        )
+
+    if (
+        session.current_question is None
+        or session.current_concept_label is None
+        or session.current_question_number is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="There is no active question.",
+        )
+
+    if request.question_number != session.current_question_number:
+        raise HTTPException(
+            status_code=400,
+            detail="Question number does not match the active question.",
+        )
+
+    question = session.current_question
+
+    if question.question_type == "mcq":
+        raise HTTPException(
+            status_code=400,
             detail=(
-                "The answer was recorded, but "
-                "the next question could not "
-                f"be generated: {e}"
+                "This question expects a multiple-choice answer — "
+                "use /answer-adaptive-question instead."
             ),
         )
 
+    from AI_Layer.ai_core import verify_answer
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # Return the NEXT question number.
-    #
-    # This fixes the bug where Q2 received ID 1
-    # and inherited Q1's selected option.
-    # --------------------------------------------------------
+    verification = await verify_answer(
+        question,
+        request.student_answer,
+    )
 
-    return {
+    concept_label = session.current_concept_label
 
-        "session_id": (
-            session.session_id
-        ),
+    return await record_answer_and_advance(
+        session,
+        request.question_number,
+        concept_label,
+        verification.is_correct,
+        sb_client,
+        extra_fields={
+            "feedback": verification.feedback,
+            "source_locator": verification.source_locator,
+        },
+    )
 
-        "completed": False,
 
-        "question_number": (
-            request.question_number
-        ),
+# ============================================================
+# GROUNDED TUTOR CHAT (source-cited, with refusal)
+# ============================================================
 
-        "total_questions": (
-            session.total_questions
-        ),
+class GroundedChatRequest(BaseModel):
+    session_id: str
+    message: str
+    history: list[ChatTurn] = []
 
-        "was_correct": (
-            was_correct
-        ),
 
-        "answered_concept": (
-            concept_label
-        ),
+@app.post("/grounded-chat")
+async def grounded_chat_api(
+    request: GroundedChatRequest,
+):
 
-        "answered_difficulty": (
-            difficulty_before
-        ),
+    from AI_Layer.ai_core import (
+        answer_grounded_question,
+        embed_texts,
+    )
 
-        "new_difficulty": (
-            difficulty_after
-        ),
+    material = materials.get(request.session_id)
 
-        "streak_direction": (
-            session.streak_direction
-        ),
+    if material is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No ingested material found for this session.",
+        )
 
-        "streak_count": (
-            session.streak_count
-        ),
+    chunks = material["chunks"]
 
-        "next_question_number": (
-            next_question_number
-        ),
+    if material["embeddings"] is None:
+        material["embeddings"] = await embed_texts(
+            [chunk.text for chunk in chunks]
+        )
 
-        "next_concept": (
-            next_concept.label
-        ),
+    response = await answer_grounded_question(
+        chunks,
+        material["embeddings"],
+        request.history,
+        request.message,
+    )
 
-        "next_difficulty": (
-            session.current_difficulty
-        ),
+    return response.model_dump()
 
-        "question": (
-            next_question.model_dump()
-        ),
-    }
 
+# ============================================================
+# LEARNER MASTERY
+# ============================================================
+
+@app.get("/mastery")
+async def mastery_api(
+    authorization: str | None = Header(None),
+):
+
+    sb_client = get_user_client(authorization)
+
+    if sb_client is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to view your mastery profile.",
+        )
+
+    return await fetch_mastery(sb_client)
+
+
+# ============================================================
+# POST-ANSWER EXPLANATION & QUIZ SUMMARY
+# ============================================================
+
+class ExplainAnswerRequest(BaseModel):
+    question: dict
+    selected_option_index: int
+
+
+@app.post("/explain-answer")
+async def explain_answer_api(
+    request: ExplainAnswerRequest,
+):
+
+    from AI_Layer.ai_core import generate_explanation
+    from AI_Layer.models import QuestionDraft
+
+    question = QuestionDraft.model_validate(request.question)
+
+    explanation = await generate_explanation(
+        question,
+        request.selected_option_index,
+    )
+
+    return {"explanation": explanation}
+
+
+class QuizSummaryRequest(BaseModel):
+    report_data: dict
+
+
+@app.post("/quiz-summary")
+async def quiz_summary_api(
+    request: QuizSummaryRequest,
+):
+
+    from AI_Layer.ai_core import generate_quiz_summary
+    from AI_Layer.models import QuizReportData
+
+    report_data = QuizReportData.model_validate(request.report_data)
+
+    summary = await generate_quiz_summary(report_data)
+
+    return {"summary": summary}
 
 # ============================================================
 # LEGACY BATCH GENERATION
@@ -1048,7 +1392,8 @@ async def generate_quiz_api(
 
     concepts = (
         await deduplicate_concepts(
-            concept_drafts
+            concept_drafts,
+            chunks,
         )
     )
 

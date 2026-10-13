@@ -1,0 +1,97 @@
+Software Engineering - Chapter 1: Introduction
+By Mr. Ashish Pandey
+
+Why Software Engineering?
+Software engineering is needed because of the change in nature and complexity of software, the end of the era of a single "guru" developer being enough, and the universal desire for improvement. The field exists because the industry must be ready for constant change.
+
+The Software Crisis
+The software industry has long been described as being in crisis. According to data from the Standish Group International (CHAOS research), of software projects: 53% went over budget, 31% failed outright, and only 16% succeeded.
+A separate analysis of 28,000 projects completed in 2000 found: 49% were completed late, over budget, and/or with missing features; 23% were cancelled; and only 28% were successful.
+As per an IBM report: 31% of projects get cancelled before completion, 53% overrun their cost estimates by an average of 189%, and for every 100 projects there are 94 restarts.
+
+Hardware vs Software Costs
+Unlike hardware, which follows Moore's Law (processor speed/memory capacity roughly doubles every two years), software productivity has grown far more slowly over the same period. The relative cost of hardware compared to software has declined drastically since 1960.
+
+Common questions asked of managers and technical staff include: why does it take so long to finish a program, why are costs so high, why can't all errors be found before release, and why is it difficult to measure development progress.
+
+Factors Contributing to the Software Crisis
+- Larger and more complex problems
+- Lack of adequate training in software engineering
+- Increasing skill shortage
+- Low productivity improvements
+
+Famous Software Failures
+
+Ariane 5: It took the European Space Agency 10 years and $7 billion to produce the Ariane 5 rocket. It was destroyed 39 seconds after launch, at an altitude of two and a half miles, along with four expensive uninsured scientific satellites. The cause was a software error: the guidance system tried to convert a 64-bit floating point number (the rocket's sideways velocity) into a 16-bit integer. The number was too large, causing an overflow error after 36.7 seconds. The backup guidance system, running identical software, failed in the exact same way milliseconds earlier, so there was no working backup.
+
+Y2K Problem: Caused by the widespread practice of storing years using only the last two digits (e.g. "64" instead of "1964"), creating ambiguity and errors when the year 2000 arrived.
+
+The Patriot Missile: First used in the Gulf War as a defense against Iraqi Scud missiles. It failed several times, including an incident that killed 28 US soldiers in Dhahran, Saudi Arabia. The cause was a small timing error in the system's internal clock that accumulated over time; after about 14 hours of continuous operation the tracking system became inaccurate, and in the Dhahran attack the system had been running for more than 100 hours.
+
+The Space Shuttle: During an abort scenario requiring two sequential fuel dumps, a software crash occurred during the second dump. The fuel management module, which had completed the first dump and exited successfully, crashed when restarted for the second dump. After a simple fix, programmers applied a systematic review process to other modules and found seventeen additional, previously unknown problems.
+
+Financial Software: Many companies have experienced accounting system failures due to software faults, ranging from incorrect output to full system crashes.
+
+Windows XP: Released by Microsoft on October 25, 2001. On the very same day, Microsoft posted 18 MB of compatibility patches for bug fixes and security holes, including two patches for important security vulnerabilities.
+
+"No Silver Bullet"
+Hardware costs continue to decline rapidly, but there is no equivalent "silver bullet" for software: no single technological or management development promises an order-of-magnitude improvement in software productivity, reliability, or simplicity. The hard part of building software is the conceptual work of specification, design, and testing -- not the mechanical labor of writing it down. Syntax errors are trivial compared to conceptual (logic) errors. Reusability and open source are sometimes proposed as the closest thing to a silver bullet. Blame for software bugs is often spread across software companies, developers, the legal system, and universities.
+
+What Is Software?
+Software consists of computer programs and their associated documentation. Formally: Software = Programs + Documentation + Operating Procedures.
+
+Documentation includes manuals for analysis/specification (formal specification, context diagrams, data flow diagrams), design (flow charts, entity-relationship diagrams), implementation (source code listings, cross-reference listings), and testing (test data, test results).
+
+Operating procedures include user manuals (system overview, beginner's guide/tutorial, reference guide) and operational manuals (installation guide, system administration guide).
+
+Software Products
+Software products may be generic (developed to be sold to a range of different customers, such as operating systems, compilers, word processors) or bespoke/custom (developed for a single customer according to their specific requirements). A software product is what is delivered to the user and may include source code, object code, documents, manuals, reports, test suites, prototypes, test data, and test results.
+
+What Is Software Engineering?
+Software engineering is an engineering discipline concerned with all aspects of software production. Software engineers should adopt a systematic and organised approach to their work, use appropriate tools and techniques depending on the problem and development constraints, and make good use of available resources.
+
+At the first software engineering conference in 1968, Fritz Bauer defined it as "the establishment and use of sound engineering principles in order to obtain economically developed software that is reliable and works efficiently on real machines." Stephen Schach defined it as "a discipline whose aim is the production of quality software, delivered on time, within budget, that satisfies its requirements." The objective has since shifted to emphasize maintainability alongside timeliness, budget, and requirements satisfaction.
+
+Software Characteristics
+Software does not wear out the way physical devices do (though it has a failure curve with burn-in and useful-life phases rather than a traditional hardware wear-out phase). Software is not manufactured in the traditional sense; its components can be reused; and software is flexible compared to hardware, though each change introduces risk of new defects (shown as repeated failure-rate spikes after each change in the "actual" failure curve, versus an idealized smoothly-declining curve).
+
+Comparing bridge construction to programming: bridge problems are well understood, many bridges already exist as reference, requirements rarely change during construction, strength can be calculated precisely, failures are investigated in detail, and the engineering discipline is thousands of years old with slowly-changing materials and techniques. In contrast, only parts of a software problem are typically understood, every program is different, requirements change throughout development, correctness cannot be calculated with existing methods, failure causes are often unavailable or concealed, the discipline is only about 50 years old, and both hardware and software change rapidly.
+
+The Changing Nature of Software
+Software categories include system software, real-time software, embedded software, business software, personal computer software, artificial intelligence software, web-based software, and engineering/scientific software. A significant trend has been the emergence of open-source software, where source code is made available to customers and organizations -- examples include Linux, MySQL, PHP, OpenOffice, and the Apache web server.
+
+Software Myths -- Management Perspective
+- Having good standards and clear procedures does not guarantee quality output; as the saying goes, "the taste of any food item is in the eating, not in the recipe."
+- Having the latest computers and state-of-the-art tools does not remove the need to worry about product quality; infrastructure is only one of several factors determining quality.
+- Adding more software specialists to a late project, even highly skilled ones, may further delay the schedule rather than fix it (an instance of what is sometimes called Brooks's Law).
+- Software is not actually as easy to change as commonly assumed.
+- Computers do not always provide greater reliability than the devices they replace.
+
+Software Myths -- Customer Perspective
+- A general, vague statement of objectives is not sufficient to begin development; proceeding this way typically leads to disaster.
+- Software with more features is not necessarily better software, and software rarely works correctly the first time -- both are myths.
+
+Software Myths -- Developer Perspective
+- Once software is demonstrated, the job is usually not done; problems typically just begin at that point.
+- Software quality cannot be properly assessed only at the end via testing; quality assessment techniques should be applied throughout the development lifecycle.
+- Tested code is only one of several deliverables of a software project, not the only one.
+- The aim of software engineering today is not simply to produce working programs, but to produce good-quality, maintainable programs.
+
+Terminology
+Deliverables are the concrete work products generated during development (e.g. source code, user manuals, operating procedure manuals). Milestones are events used to track project status, such as finalization of specification or completion of design documentation; they are essential for project planning and management.
+
+A product is what is delivered to the customer (source code, specification documents, manuals, documentation, etc.) -- essentially a set of deliverables. A process is the way in which software is produced -- the collection of activities leading to a product. An efficient process is necessary for good quality products, but an obsessive over-reliance on process alone is also dangerous; a weak process will undoubtedly hurt the end product.
+
+A measure provides a quantitative indication of the extent, dimension, size, capacity, efficiency, productivity, or reliability of some attribute of a product or process. Measurement is the act of evaluating a measure. A metric is a quantitative measure of the degree to which a system, component, or process possesses a given attribute.
+
+Process metrics quantify attributes of the software development process and environment (e.g. productivity, quality, efficiency). Product metrics are measures of the software product itself (e.g. size, reliability, complexity).
+
+Productivity is the rate of output per unit of effort -- output achieved relative to time taken, independent of cost incurred. The most common unit of effort is Person-Months (PM): the number of people involved multiplied by the number of months. Productivity is often measured as LOC/PM (lines of code produced per person-month).
+
+A module has many equivalent definitions depending on language and context: a FORTRAN subroutine, an Ada package, a Pascal/C procedure or function, a C++/Java class, or even a work assignment given to an individual developer; the term "subprogram" is sometimes used interchangeably. A software component is more formally defined as an independently deliverable piece of functionality that provides access to its services through interfaces, or as a modular, deployable, and replaceable part of a system that encapsulates its implementation and exposes a set of interfaces.
+
+Generic software products are developed for an anonymous, broad customer base (e.g. operating systems, compilers, analyzers, word processors, CASE tools). Customized (bespoke) products are developed for a specific customer according to their requirements; roughly 80% of development projects fall into this category.
+
+The management of software development depends on four interdependent factors: people, product, process, and project, linked by relationships of dependency and order.
+
+References: "Software Engineering" by K.K. Aggarwal and Yogesh Singh; "Software Engineering: A Practitioner's Approach" by Roger S. Pressman.

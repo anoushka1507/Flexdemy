@@ -1,5 +1,12 @@
 import React, { useState } from 'react';
 import { Quiz, AdaptiveQuizLaunch } from '../types';
+import { supabase } from '../supabaseClient';
+
+const QUESTION_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'mcq', label: 'Multiple Choice' },
+  { value: 'short_answer', label: 'Short Answer' },
+  { value: 'numerical', label: 'Numerical' },
+];
 
 interface QuizUploadModalProps {
   isOpen: boolean;
@@ -19,6 +26,16 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [questionTypes, setQuestionTypes] = useState<string[]>(['mcq']);
+
+  const toggleQuestionType = (value: string) => {
+    setQuestionTypes((prev) => {
+      const next = prev.includes(value)
+        ? prev.filter((t) => t !== value)
+        : [...prev, value];
+      return next.length > 0 ? next : prev;
+    });
+  };
 
   if (!isOpen) return null;
 
@@ -55,13 +72,20 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
     const formData = new FormData();
 
     formData.append('file', selectedFile);
+    formData.append('question_types', questionTypes.join(','));
 
     const difficultyValue = difficulty.toLowerCase();
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
 
     const response = await fetch(
       `/api/start-adaptive-quiz?difficulty=${difficultyValue}&question_count=${questionCount}`,
       {
         method: 'POST',
+        headers: accessToken
+          ? { Authorization: `Bearer ${accessToken}` }
+          : undefined,
         body: formData,
       }
     );
@@ -84,12 +108,15 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
       firstQuestion: {
         id: data.question_number,
         question: data.question.question_text,
-        options: data.question.options.map((opt: any) => opt.text),
-        correctAnswerIndex: data.question.options.findIndex((opt: any) => opt.is_correct),
+        options: (data.question.options || []).map((opt: any) => opt.text),
+        correctAnswerIndex: (data.question.options || []).findIndex((opt: any) => opt.is_correct),
         hint: '',
         explanation: '',
         concept: data.concept_label,
         difficulty: data.difficulty,
+        questionType: data.question.question_type || 'mcq',
+        topic: data.question.topic,
+        sourceLocator: data.question.source_locator,
       },
     };
 
@@ -173,13 +200,13 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
             <div className="border-2 border-dashed border-[#d8d7e8] rounded-2xl p-4 text-center bg-[#f6f6fa] hover:bg-[#ececf4]/50 transition-colors relative mb-3">
               <input
                 type="file"
-                accept=".pdf"
+                accept=".pdf,.txt,.md,.pptx,.mp4,.mov,.webm,.mkv"
                 onChange={handleFileUpload}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
               <span className="material-symbols-outlined text-3xl text-[#7372A5] mb-1">cloud_upload</span>
               <p className="text-xs font-bold text-[#222138]">
-                {selectedFileName ? `Selected: ${selectedFileName}` : 'Click to upload PDF, DOCX, or TXT file'}
+                {selectedFileName ? `Selected: ${selectedFileName}` : 'Click to upload a PDF, slide deck, lecture video, or text file'}
               </p>
               <p className="text-[11px] text-gray-400 mt-0.5">Drag & drop your study notes here</p>
             </div>
@@ -222,6 +249,29 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
                 <option value={5}>5 Questions</option>
                 <option value={10}>10 Questions</option>
               </select>
+            </div>
+          </div>
+
+          {/* Question Types */}
+          <div>
+            <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+              Question Types
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {QUESTION_TYPE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => toggleQuestionType(opt.value)}
+                  className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-all ${
+                    questionTypes.includes(opt.value)
+                      ? 'bg-[#7372A5] text-white font-bold shadow-sm'
+                      : 'bg-[#ececf4] text-[#7372A5] hover:bg-[#d8d7e8] border border-[#d8d7e8]'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
           </div>
 

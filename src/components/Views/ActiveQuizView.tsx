@@ -7,6 +7,8 @@ import FoxCompanion, {
   FoxState,
 } from '../../components/FoxCompanion';
 
+import { TutorChatPanel } from '../../components/TutorChatPanel';
+
 // @ts-ignore
 import Hypher from 'hypher';
 // @ts-ignore
@@ -131,6 +133,27 @@ export const ActiveQuizView: React.FC<
     setAdaptiveError,
   ] = useState('');
 
+  // Track D: open-ended (short-answer / numerical) question support.
+  const [
+    openAnswers,
+    setOpenAnswers,
+  ] = useState<Record<number, string>>({});
+
+  const [
+    answeredCorrectly,
+    setAnsweredCorrectly,
+  ] = useState<Record<number, boolean>>({});
+
+  const [
+    openFeedback,
+    setOpenFeedback,
+  ] = useState<Record<number, string>>({});
+
+  const [
+    isTutorChatOpen,
+    setIsTutorChatOpen,
+  ] = useState(false);
+
 
   const [
     spokenHighlight,
@@ -205,6 +228,10 @@ export const ActiveQuizView: React.FC<
     );
 
   }
+
+  const isMcqQuestion =
+    !currentQuestion.questionType ||
+    currentQuestion.questionType === 'mcq';
 
 
   // ----------------------------------------------------------
@@ -395,6 +422,20 @@ export const ActiveQuizView: React.FC<
     finalQuestions.forEach(
       (question) => {
 
+        const openResult =
+          answeredCorrectly[
+            question.id
+          ];
+
+        if (openResult !== undefined) {
+
+          if (openResult) {
+            correctCount += 1;
+          }
+
+          return;
+        }
+
         const selected =
           selectedAnswers[
             question.id
@@ -458,12 +499,20 @@ export const ActiveQuizView: React.FC<
         existing.total += 1;
 
 
-        if (
-          selectedAnswers[
+        const openResult =
+          answeredCorrectly[
             question.id
-          ] ===
-          question.correctAnswerIndex
-        ) {
+          ];
+
+        const isCorrect =
+          openResult !== undefined
+            ? openResult
+            : selectedAnswers[
+                question.id
+              ] ===
+              question.correctAnswerIndex;
+
+        if (isCorrect) {
           existing.score += 1;
         }
 
@@ -704,11 +753,15 @@ export const ActiveQuizView: React.FC<
           );
 
 
+        const nextIsMcq =
+          !raw?.question_type ||
+          raw.question_type === 'mcq';
+
         if (
           !raw?.question_text ||
-          options.length !== 4 ||
-          correctAnswerIndex <
-            0
+          (nextIsMcq &&
+            (options.length !== 4 ||
+              correctAnswerIndex < 0))
         ) {
 
           throw new Error(
@@ -749,6 +802,14 @@ export const ActiveQuizView: React.FC<
               | 'Easy'
               | 'Medium'
               | 'Hard',
+
+          questionType:
+            raw.question_type || 'mcq',
+
+          topic: raw.topic,
+
+          sourceLocator:
+            raw.source_locator,
         };
 
         setSelectedAnswers(
@@ -796,6 +857,145 @@ export const ActiveQuizView: React.FC<
         setAdaptiveLoading(
           false
         );
+      }
+    };
+
+
+  // ----------------------------------------------------------
+  // ADAPTIVE NEXT (OPEN-ENDED: short-answer / numerical)
+  // ----------------------------------------------------------
+
+  const handleOpenAnswerSubmit =
+    async () => {
+
+      if (!adaptiveSessionId) {
+        return;
+      }
+
+      const answerText =
+        (openAnswers[currentQuestion.id] || '').trim();
+
+      if (!answerText) {
+        setAdaptiveError(
+          'Please enter an answer before continuing.'
+        );
+        return;
+      }
+
+      setAdaptiveError('');
+      setAdaptiveLoading(true);
+
+      try {
+
+        const response = await fetch(
+          '/api/answer-adaptive-question-open',
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              session_id: adaptiveSessionId,
+              question_number: currentQuestion.id,
+              student_answer: answerText,
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          const text = await response.text();
+          let message = 'Could not process the answer.';
+          try {
+            const parsed = JSON.parse(text);
+            message = parsed?.detail || message;
+          } catch {
+            if (text) message = text;
+          }
+          throw new Error(message);
+        }
+
+        const data = await response.json();
+
+        setAnsweredCorrectly((prev) => ({
+          ...prev,
+          [currentQuestion.id]: Boolean(data.was_correct),
+        }));
+
+        setOpenFeedback((prev) => ({
+          ...prev,
+          [currentQuestion.id]: data.feedback || '',
+        }));
+
+        if (data.completed) {
+          finishQuiz(questions);
+          return;
+        }
+
+        const raw = data.question;
+
+        const rawOptions = Array.isArray(raw?.options)
+          ? raw.options
+          : [];
+
+        const options = rawOptions
+          .map((option: any) =>
+            typeof option === 'string' ? option : option?.text || ''
+          )
+          .filter((option: string) => option.trim().length > 0);
+
+        const correctAnswerIndex = rawOptions.findIndex(
+          (option: any) =>
+            option?.is_correct === true ||
+            option?.isCorrect === true ||
+            option?.correct === true
+        );
+
+        if (!raw?.question_text) {
+          throw new Error(
+            'The backend returned an invalid next question.'
+          );
+        }
+
+        const nextQuestion: Question = {
+          id: currentQuestion.id + 1,
+          question: raw.question_text,
+          options,
+          correctAnswerIndex,
+          hint: '',
+          explanation: '',
+          concept: data.next_concept,
+          difficulty: String(
+            data.next_difficulty || 'medium'
+          ).replace(/^./, (c) => c.toUpperCase()) as
+            | 'Easy'
+            | 'Medium'
+            | 'Hard',
+          questionType: raw.question_type || 'mcq',
+          topic: raw.topic,
+          sourceLocator: raw.source_locator,
+        };
+
+        setOpenAnswers((prev) => {
+          const next = { ...prev };
+          delete next[nextQuestion.id];
+          return next;
+        });
+
+        setQuestions((prev) => [...prev, nextQuestion]);
+        setCurrentQuestionIndex((prev) => prev + 1);
+
+      } catch (error) {
+
+        console.error('Open-answer question error:', error);
+
+        setAdaptiveError(
+          error instanceof Error
+            ? error.message
+            : 'Could not load the next question.'
+        );
+
+      } finally {
+        setAdaptiveLoading(false);
       }
     };
 
@@ -938,6 +1138,15 @@ export const ActiveQuizView: React.FC<
           </span>
 
 
+          {isAdaptive && (
+            <button
+              onClick={() => setIsTutorChatOpen(true)}
+              className="bg-[#ececf4] text-[#7372A5] border border-[#d8d7e8] text-xs font-bold px-3 py-2 rounded-xl"
+            >
+              Ask Tutor
+            </button>
+          )}
+
           {!isAdaptive && (
             <button
               onClick={() =>
@@ -954,6 +1163,12 @@ export const ActiveQuizView: React.FC<
         </div>
 
       </header>
+
+      <TutorChatPanel
+        isOpen={isTutorChatOpen}
+        onClose={() => setIsTutorChatOpen(false)}
+        sessionId={adaptiveSessionId}
+      />
 
 
       {/* ====================================================
@@ -1218,7 +1433,53 @@ export const ActiveQuizView: React.FC<
               </p>
             </div>
 
-            {/* Answer Options */}
+            {currentQuestion.sourceLocator && (
+              <div className="text-[11px] font-semibold text-[#7372A5] bg-[#ececf4] inline-flex items-center gap-1 px-2.5 py-1 rounded-full">
+                Source: {currentQuestion.sourceLocator}
+              </div>
+            )}
+
+            {/* Open-ended answer (short-answer / numerical) */}
+            {!isMcqQuestion && (
+              <div className="space-y-2 pt-2">
+                <input
+                  type={
+                    currentQuestion.questionType === 'numerical'
+                      ? 'text'
+                      : 'text'
+                  }
+                  inputMode={
+                    currentQuestion.questionType === 'numerical'
+                      ? 'decimal'
+                      : 'text'
+                  }
+                  value={openAnswers[currentQuestion.id] || ''}
+                  onChange={(e) =>
+                    setOpenAnswers((prev) => ({
+                      ...prev,
+                      [currentQuestion.id]: e.target.value,
+                    }))
+                  }
+                  disabled={adaptiveLoading}
+                  placeholder={
+                    currentQuestion.questionType === 'numerical'
+                      ? 'Enter a numeric answer...'
+                      : 'Type your answer...'
+                  }
+                  className="w-full px-4 py-3 rounded-2xl border-2 border-[#d8d7e8] focus:outline-none focus:ring-2 focus:ring-[#7372A5]/50 focus:border-[#7372A5] text-sm font-semibold"
+                />
+
+                {openFeedback[currentQuestion.id] && (
+                  <p className="text-xs text-gray-500">
+                    {openFeedback[currentQuestion.id]}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Answer Options (MCQ) */}
+            {isMcqQuestion && (
+            <>
             <div className="space-y-3 pt-2">
               {currentQuestion.options.map((option, optionIndex) => {
                 const isSelected = selectedAnswers[currentQuestion.id] === optionIndex;
@@ -1302,9 +1563,8 @@ export const ActiveQuizView: React.FC<
 
               )}
 
-
-            
-                  
+            </>
+            )}
 
             {adaptiveError && (
               <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">
@@ -1343,18 +1603,25 @@ export const ActiveQuizView: React.FC<
             <button
               onClick={
                 isAdaptive
-                  ? handleAdaptiveNext
+                  ? (isMcqQuestion
+                      ? handleAdaptiveNext
+                      : handleOpenAnswerSubmit)
                   : handleStaticNext
               }
               disabled={
                 adaptiveLoading ||
-                selectedAnswers[
-                  currentQuestion.id
-                ] ===
-                  undefined ||
-                selectedAnswers[
-                  currentQuestion.id
-                ] === null
+                (isMcqQuestion
+                  ? selectedAnswers[
+                      currentQuestion.id
+                    ] === undefined ||
+                    selectedAnswers[
+                      currentQuestion.id
+                    ] === null
+                  : !(
+                      openAnswers[
+                        currentQuestion.id
+                      ] || ''
+                    ).trim())
               }
               className="px-6 py-2.5 rounded-xl bg-[#7372A5] text-white font-bold text-xs shadow-md disabled:opacity-50"
             >

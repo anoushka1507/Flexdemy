@@ -14,6 +14,8 @@ export type Difficulty =
   | 'Medium'
   | 'Hard';
 
+export type QuestionType = 'mcq' | 'short_answer' | 'numerical';
+
 export interface Question {
   id: number;
   question: string;
@@ -25,6 +27,24 @@ export interface Question {
   // Used by adaptive quizzes.
   concept?: string;
   difficulty?: Difficulty;
+
+  // Track D: source grounding + non-MCQ question types.
+  questionType?: QuestionType;
+  topic?: string;
+  sourceLocator?: string;
+}
+
+export interface Citation {
+  chunkIndex: number;
+  locator: string;
+  excerpt: string;
+}
+
+export interface GroundedChatMessage {
+  role: 'user' | 'model';
+  text: string;
+  isGrounded?: boolean;
+  citations?: Citation[];
 }
 
 export interface Quiz {

@@ -1,0 +1,126 @@
+{
+  "n_cases": 13,
+  "refusal_accuracy": 1.0,
+  "retrieval_hit_rate": 1.0,
+  "avg_faithfulness": 5.0,
+  "avg_relevancy": 5.0,
+  "cases": [
+    {
+      "question": "What caused the Ariane 5 rocket failure?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "Why did the Patriot Missile system fail in Dhahran, Saudi Arabia?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "What is the Y2K problem?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "According to the Standish Group CHAOS research, what percentage of software projects succeeded?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "What does 'No Silver Bullet' mean in the context of software engineering?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "How is software productivity typically measured?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "What is the difference between a generic and a bespoke software product?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "What happened with the Space Shuttle's fuel management software?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "What is the difference between a process metric and a product metric?",
+      "is_answerable": true,
+      "is_grounded": true,
+      "refusal_correct": true,
+      "retrieval_hit": true,
+      "faithfulness": 5,
+      "relevancy": 5
+    },
+    {
+      "question": "Who wrote Romeo and Juliet?",
+      "is_answerable": false,
+      "is_grounded": false,
+      "refusal_correct": true,
+      "retrieval_hit": null,
+      "faithfulness": null,
+      "relevancy": null
+    },
+    {
+      "question": "What is the boiling point of water at sea level?",
+      "is_answerable": false,
+      "is_grounded": false,
+      "refusal_correct": true,
+      "retrieval_hit": null,
+      "faithfulness": null,
+      "relevancy": null
+    },
+    {
+      "question": "Explain how a neural network's backpropagation algorithm works.",
+      "is_answerable": false,
+      "is_grounded": false,
+      "refusal_correct": true,
+      "retrieval_hit": null,
+      "faithfulness": null,
+      "relevancy": null
+    },
+    {
+      "question": "What year did India gain independence?",
+      "is_answerable": false,
+      "is_grounded": false,
+      "refusal_correct": true,
+      "retrieval_hit": null,
+      "faithfulness": null,
+      "relevancy": null
+    }
+  ]
+}

@@ -20,6 +20,7 @@ import {
 
 import { Sidebar } from './components/Sidebar';
 import { QuizUploadModal } from './components/QuizUploadModal';
+import { MasteryPanel } from './components/MasteryPanel';
 
 import { LoginView } from './components/Views/LoginView';
 import { LandingView } from './components/Views/LandingView';
@@ -383,13 +384,7 @@ export default function App() {
                 Analytics & Mastery Radar
               </h1>
 
-              <div className="bg-white p-8 rounded-3xl border border-purple-100 shadow-xs">
-
-                <p className="text-xs text-gray-500">
-                  Detailed break-down of your subject domain performance.
-                </p>
-
-              </div>
+              <MasteryPanel />
 
             </div>
 

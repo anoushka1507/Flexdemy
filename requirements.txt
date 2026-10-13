@@ -5,3 +5,6 @@ python-multipart
 google-genai
 pydantic
 pypdf
+python-pptx
+supabase
+requests

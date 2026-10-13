@@ -11,12 +11,25 @@ StreakDirection = Literal["correct", "incorrect", ""]
 # 1.1 EXTRACTION MODELS
 # ============================================================
 
+SourceType = Literal["pdf", "slide", "video", "text"]
+
+
 class Chunk(BaseModel):
     chunk_index: int
     text: str
     approx_page_range: str = Field(
         description="Approximate pages this text spans, e.g., '1-2'"
     )
+    source_type: SourceType = "pdf"
+    locator: str = Field(
+        default="",
+        description=(
+            "Human-readable citation target for this chunk, e.g. "
+            "'Page 3-4', 'Slide 7', '12:34-13:02'. Falls back to "
+            "approx_page_range when empty."
+        ),
+    )
+    source_filename: str = ""
 
 
 # ============================================================
@@ -30,18 +43,27 @@ class ConceptDraft(BaseModel):
     description: str = Field(
         description="One-line explanation of the concept"
     )
+    topic: str = Field(
+        default="General",
+        description="Parent topic this concept belongs to",
+    )
     source_chunk_index: int
 
 
 class Concept(BaseModel):
     label: str
     description: str
+    topic: str = "General"
     source_chunk_indices: list[int]
+    locators: list[str] = Field(default_factory=list)
 
 
 # ============================================================
 # 1.3 QUESTION GENERATION MODELS
 # ============================================================
+
+QuestionType = Literal["mcq", "short_answer", "numerical"]
+
 
 class OptionDraft(BaseModel):
     text: str
@@ -57,8 +79,21 @@ class OptionDraft(BaseModel):
 
 class QuestionDraft(BaseModel):
     question_text: str
-    options: list[OptionDraft]
+    question_type: QuestionType = "mcq"
+    options: list[OptionDraft] = Field(default_factory=list)
     difficulty: Difficulty
+
+    # Short-answer / numerical questions skip `options` and are
+    # graded against these instead.
+    expected_answer: str | None = None
+    numerical_tolerance: float | None = None
+
+    topic: str = "General"
+    concept_label: str = ""
+    source_locator: str = Field(
+        default="",
+        description="Citation target this question was generated from.",
+    )
 
 
 class ValidationResult(BaseModel):
@@ -66,6 +101,15 @@ class ValidationResult(BaseModel):
     notes: str = Field(
         description="Explanation of why the question passed or failed"
     )
+
+
+class AnswerVerification(BaseModel):
+    """Second-pass, independently-prompted grading for a learner's answer."""
+
+    is_correct: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    feedback: str
+    source_locator: str = ""
 
 
 # ============================================================
@@ -126,6 +170,10 @@ class AdaptiveSession(BaseModel):
     concepts: list[Concept]
 
     concept_states: dict[str, ConceptState]
+
+    question_types: list[str] = Field(
+        default_factory=lambda: ["mcq"]
+    )
 
     questions_asked: int = 0
 
@@ -213,3 +261,38 @@ class CalibrationEstimate(BaseModel):
 class ChatTurn(BaseModel):
     role: Literal["user", "model"]
     text: str
+
+
+# ============================================================
+# 1.7 GROUNDED CHAT / RETRIEVAL
+# ============================================================
+
+class Citation(BaseModel):
+    chunk_index: int
+    locator: str
+    excerpt: str
+
+
+class GroundedChatResponse(BaseModel):
+    answer: str
+    is_grounded: bool = Field(
+        description="False when the question could not be "
+        "answered from the uploaded material.",
+    )
+    citations: list[Citation] = Field(default_factory=list)
+
+
+# ============================================================
+# 1.8 LEARNER MODEL
+# ============================================================
+
+class TopicMastery(BaseModel):
+    topic: str
+    mastery_score: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description="EMA-smoothed per-topic mastery estimate.",
+    )
+    times_seen: int = 0
+    last_updated: str = ""
