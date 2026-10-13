@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { ViewMode } from '../types';
+import { supabase } from '../supabaseClient';
 
 interface HeaderProps {
   currentView: ViewMode;
@@ -16,6 +17,32 @@ export const Header: React.FC<HeaderProps> = ({
   setDyslexiaMode,
   onOpenUploadModal,
 }) => {
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getUser().then(({ data }) => {
+      if (!mounted) return;
+      if (data.user?.email) {
+        setUserEmail(data.user.email);
+      } else {
+        setIsGuest(true);
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const displayName = userEmail
+    ? userEmail.split('@')[0]
+    : isGuest
+    ? 'Guest'
+    : '';
+
   return (
     <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-[#d8d7e8] px-4 lg:px-8 py-3 transition-colors">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
@@ -138,12 +165,14 @@ export const Header: React.FC<HeaderProps> = ({
                 className="flex items-center gap-2 p-1 rounded-full hover:bg-[#ececf4] transition-colors"
                 title="Account Profile"
               >
-                <img
-                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200"
-                  alt="Alex Johnson"
-                  className="w-8 h-8 rounded-full object-cover ring-2 ring-[#7372A5]/40"
-                />
-                <span className="hidden lg:inline text-xs font-bold text-[#222138]">Alex J.</span>
+                <div className="w-8 h-8 rounded-full bg-[#ececf4] flex items-center justify-center ring-2 ring-[#7372A5]/40">
+                  <span className="material-symbols-outlined text-[#7372A5] text-lg">
+                    person
+                  </span>
+                </div>
+                <span className="hidden lg:inline text-xs font-bold text-[#222138] truncate max-w-[100px]">
+                  {displayName}
+                </span>
               </button>
             </div>
           )}

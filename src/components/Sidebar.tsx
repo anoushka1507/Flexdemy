@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ViewMode } from '../types';
+import { supabase } from '../supabaseClient';
 
 interface SidebarProps {
   currentView: ViewMode;
@@ -15,6 +16,31 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setDyslexiaMode,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isGuest, setIsGuest] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    supabase.auth.getUser().then(({ data }) => {
+      if (!mounted) return;
+      if (data.user?.email) {
+        setUserEmail(data.user.email);
+      } else {
+        setIsGuest(true);
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const displayName = userEmail
+    ? userEmail.split('@')[0]
+    : isGuest
+    ? 'Guest'
+    : '...';
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -174,7 +200,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Footer / Account Quick Details */}
         <div className="border-t border-[#d8d7e8] pt-4 mt-auto">
           <button
-            onClick={() => setCurrentView('login')}
+            onClick={async () => {
+              await supabase.auth.signOut();
+              setCurrentView('login');
+            }}
             className="w-full flex items-center justify-between p-2 rounded-xl hover:bg-[#ececf4] transition-colors group"
           >
             <div className="flex items-center gap-2.5">
@@ -185,10 +214,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
 
               <div className="text-left">
-                  <p className="text-xs font-bold text-[#222138] group-hover:text-[#7372A5]">
-                    Anoushka
+                  <p className="text-xs font-bold text-[#222138] group-hover:text-[#7372A5] truncate max-w-[120px]">
+                    {displayName}
                   </p>
-                  <p className="text-[10px] text-gray-500">Student Pro</p>
+                  <p className="text-[10px] text-gray-500">
+                    {isGuest ? 'Guest session' : 'Student'}
+                  </p>
               </div>
             </div>
             <span className="material-symbols-outlined text-gray-400 text-lg group-hover:text-[#7372A5]">
