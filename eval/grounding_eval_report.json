@@ -2,6 +2,7 @@
   "n_cases": 13,
   "refusal_accuracy": 1.0,
   "retrieval_hit_rate": 1.0,
+  "avg_context_precision": 0.556,
   "avg_faithfulness": 5.0,
   "avg_relevancy": 5.0,
   "cases": [
@@ -12,7 +13,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "Why did the Patriot Missile system fail in Dhahran, Saudi Arabia?",
@@ -21,7 +23,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "What is the Y2K problem?",
@@ -30,7 +33,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "According to the Standish Group CHAOS research, what percentage of software projects succeeded?",
@@ -39,7 +43,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "What does 'No Silver Bullet' mean in the context of software engineering?",
@@ -48,7 +53,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "How is software productivity typically measured?",
@@ -57,7 +63,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "What is the difference between a generic and a bespoke software product?",
@@ -66,7 +73,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 1.0
     },
     {
       "question": "What happened with the Space Shuttle's fuel management software?",
@@ -75,7 +83,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "What is the difference between a process metric and a product metric?",
@@ -84,7 +93,8 @@
       "refusal_correct": true,
       "retrieval_hit": true,
       "faithfulness": 5,
-      "relevancy": 5
+      "relevancy": 5,
+      "context_precision": 0.5
     },
     {
       "question": "Who wrote Romeo and Juliet?",
@@ -93,7 +103,8 @@
       "refusal_correct": true,
       "retrieval_hit": null,
       "faithfulness": null,
-      "relevancy": null
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "What is the boiling point of water at sea level?",
@@ -102,7 +113,8 @@
       "refusal_correct": true,
       "retrieval_hit": null,
       "faithfulness": null,
-      "relevancy": null
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "Explain how a neural network's backpropagation algorithm works.",
@@ -111,7 +123,8 @@
       "refusal_correct": true,
       "retrieval_hit": null,
       "faithfulness": null,
-      "relevancy": null
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "What year did India gain independence?",
@@ -120,7 +133,8 @@
       "refusal_correct": true,
       "retrieval_hit": null,
       "faithfulness": null,
-      "relevancy": null
+      "relevancy": null,
+      "context_precision": null
     }
   ]
 }

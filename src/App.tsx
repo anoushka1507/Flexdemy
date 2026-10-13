@@ -72,9 +72,9 @@ export default function App() {
     let mounted = true;
 
     const checkAuth = async () => {
-      await supabase.auth.getSession();
+      const { data } = await supabase.auth.getSession();
       if (!mounted) return;
-      setCurrentView('login');
+      setCurrentView(data.session ? 'dashboard' : 'login');
       setAuthLoading(false);
     };
 

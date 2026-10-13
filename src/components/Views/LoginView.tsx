@@ -218,7 +218,15 @@ const [loading, setLoading] = useState(false);
           </div>
 
           <button
-            onClick={() => setCurrentView('dashboard')}
+            type="button"
+            onClick={async () => {
+              setError('');
+              const { error } = await supabase.auth.signInWithOAuth({
+                provider: 'google',
+                options: { redirectTo: window.location.origin },
+              });
+              if (error) setError(error.message);
+            }}
             className="w-full py-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 flex items-center justify-center gap-2 text-xs font-bold text-gray-700 transition-colors"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">

@@ -26,6 +26,7 @@ from AI_Layer.ai_core import (
     embed_texts,
     extract_text_and_chunk,
     retrieve_relevant_chunks,
+    with_retry,
     MODEL_TEXT,
 )
 from AI_Layer.models import ChatTurn
@@ -35,6 +36,7 @@ from google import genai
 EVAL_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+@with_retry(retries=4, backoff=5.0)
 async def judge_score(prompt: str) -> float:
     """Gemini-as-judge: returns a 1-5 score parsed from the response."""
 
@@ -58,6 +60,56 @@ async def judge_score(prompt: str) -> float:
     return json.loads(response.text)
 
 
+@with_retry(retries=4, backoff=5.0)
+async def judge_context_precision(question: str, top_matches) -> float:
+    """
+    Context precision: of the chunks actually retrieved for this
+    question, what fraction are genuinely relevant to answering it
+    (as opposed to merely similar-sounding noise)? One batched judge
+    call rates every retrieved chunk at once.
+    """
+
+    if not top_matches:
+        return 0.0
+
+    chunks_block = "\n\n".join(
+        f"[{i}] {chunk.text}"
+        for i, (chunk, _score) in enumerate(top_matches)
+    )
+
+    response = await client.aio.models.generate_content(
+        model=MODEL_TEXT,
+        contents=(
+            "For the QUESTION below, judge each numbered SOURCE CHUNK: "
+            "is it actually relevant to answering the question (true), "
+            "or just superficially similar / irrelevant (false)?\n\n"
+            f"QUESTION:\n{question}\n\n"
+            f"SOURCE CHUNKS:\n{chunks_block}"
+        ),
+        config=genai.types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema={
+                "type": "object",
+                "properties": {
+                    "relevance": {
+                        "type": "array",
+                        "items": {"type": "boolean"},
+                    },
+                },
+                "required": ["relevance"],
+            },
+            temperature=0.0,
+        ),
+    )
+
+    relevance = json.loads(response.text).get("relevance", [])
+
+    if not relevance:
+        return 0.0
+
+    return sum(1 for r in relevance if r) / len(relevance)
+
+
 async def main():
 
     if client is None:
@@ -79,7 +131,16 @@ async def main():
 
         question = case["question"]
         is_answerable = case["is_answerable"]
+
+        # A topic can legitimately be discussed in more than one
+        # chunk, so this may be a single locator or a list of any
+        # locator that should count as a correct retrieval.
         expected_locator = case.get("expected_locator")
+        expected_locators = (
+            expected_locator
+            if isinstance(expected_locator, list)
+            else [expected_locator]
+        )
 
         top_matches = await retrieve_relevant_chunks(
             chunks, embeddings, question, k=4
@@ -88,7 +149,7 @@ async def main():
         retrieved_locators = [c.locator for c, _score in top_matches]
 
         hit = (
-            expected_locator in retrieved_locators
+            any(loc in retrieved_locators for loc in expected_locators)
             if is_answerable
             else None
         )
@@ -101,8 +162,11 @@ async def main():
 
         faithfulness = None
         relevancy = None
+        precision = None
 
         if response.is_grounded:
+
+            precision = await judge_context_precision(question, top_matches)
 
             # Judge against the FULL chunk text the model actually saw,
             # not the truncated citation excerpt (which is just for UI
@@ -133,6 +197,7 @@ async def main():
                 "retrieval_hit": hit,
                 "faithfulness": faithfulness["score"] if faithfulness else None,
                 "relevancy": relevancy["score"] if relevancy else None,
+                "context_precision": precision,
             }
         )
 
@@ -140,6 +205,7 @@ async def main():
     hits = [r["retrieval_hit"] for r in answerable_cases if r["retrieval_hit"] is not None]
     faithfulness_scores = [r["faithfulness"] for r in results if r["faithfulness"] is not None]
     relevancy_scores = [r["relevancy"] for r in results if r["relevancy"] is not None]
+    precision_scores = [r["context_precision"] for r in results if r["context_precision"] is not None]
     refusal_accuracy = sum(r["refusal_correct"] for r in results) / len(results)
 
     summary = {
@@ -147,6 +213,10 @@ async def main():
         "refusal_accuracy": round(refusal_accuracy, 3),
         "retrieval_hit_rate": (
             round(sum(hits) / len(hits), 3) if hits else None
+        ),
+        "avg_context_precision": (
+            round(sum(precision_scores) / len(precision_scores), 3)
+            if precision_scores else None
         ),
         "avg_faithfulness": (
             round(sum(faithfulness_scores) / len(faithfulness_scores), 2)

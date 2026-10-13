@@ -47,6 +47,22 @@ class ConceptDraft(BaseModel):
         default="General",
         description="Parent topic this concept belongs to",
     )
+    subtopic: str = Field(
+        default="",
+        description=(
+            "Optional finer grouping within 'topic', if the "
+            "material naturally splits into sections under it. "
+            "Leave empty when 'topic' alone is specific enough."
+        ),
+    )
+    prerequisites: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Labels of other concepts from this SAME extraction "
+            "that a student should understand first. Empty if "
+            "this concept has no prerequisites among the others."
+        ),
+    )
     source_chunk_index: int
 
 
@@ -54,6 +70,8 @@ class Concept(BaseModel):
     label: str
     description: str
     topic: str = "General"
+    subtopic: str = ""
+    prerequisites: list[str] = Field(default_factory=list)
     source_chunk_indices: list[int]
     locators: list[str] = Field(default_factory=list)
 

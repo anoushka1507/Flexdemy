@@ -265,16 +265,53 @@ def extract_text_and_chunk(
     if not text:
         return []
 
-    return [
-        Chunk(
-            chunk_index=0,
-            text=text,
-            approx_page_range="1",
-            source_type="text",
-            locator="Document",
-            source_filename=source_filename,
+    words = text.split()
+
+    TARGET_WORDS = 1200
+    OVERLAP_WORDS = 150
+
+    if len(words) <= TARGET_WORDS:
+
+        return [
+            Chunk(
+                chunk_index=0,
+                text=text,
+                approx_page_range="1",
+                source_type="text",
+                locator="Document",
+                source_filename=source_filename,
+            )
+        ]
+
+    chunks = []
+    chunk_index = 0
+    start = 0
+
+    while start < len(words):
+
+        end = min(start + TARGET_WORDS, len(words))
+
+        chunk_text = " ".join(words[start:end])
+
+        chunks.append(
+            Chunk(
+                chunk_index=chunk_index,
+                text=chunk_text,
+                approx_page_range=f"Section {chunk_index + 1}",
+                source_type="text",
+                locator=f"Section {chunk_index + 1}",
+                source_filename=source_filename,
+            )
         )
-    ]
+
+        chunk_index += 1
+
+        if end >= len(words):
+            break
+
+        start = end - OVERLAP_WORDS
+
+    return chunks
 
 
 # ============================================================
@@ -426,20 +463,33 @@ async def extract_concepts(
 
     MAX_SOURCE_WORDS = 9000
 
-    source_words = []
+    # Keep the chunk boundaries visible to the model (instead of
+    # flattening everything into one blob) so each extracted concept
+    # can be attributed to the chunk it actually came from, rather
+    # than always being credited to the first chunk.
+    source_parts = []
+    included_chunk_indices = []
+    total_words = 0
 
     for chunk in chunks:
 
-        source_words.extend(
-            chunk.text.split()
-        )
+        chunk_words = chunk.text.split()
 
-        if len(source_words) >= MAX_SOURCE_WORDS:
+        if total_words >= MAX_SOURCE_WORDS:
             break
 
-    source_text = " ".join(
-        source_words[:MAX_SOURCE_WORDS]
-    )
+        remaining_budget = MAX_SOURCE_WORDS - total_words
+        chunk_words = chunk_words[:remaining_budget]
+
+        source_parts.append(
+            f"[[CHUNK {chunk.chunk_index}]]\n"
+            + " ".join(chunk_words)
+        )
+
+        included_chunk_indices.append(chunk.chunk_index)
+        total_words += len(chunk_words)
+
+    source_text = "\n\n".join(source_parts)
 
     prompt = (
         "Extract the most important distinct educational "
@@ -449,12 +499,25 @@ async def extract_concepts(
 
         "Each concept must be meaningfully distinct.\n"
 
+        "The material below is split into labeled chunks, each "
+        "starting with a marker like '[[CHUNK 2]]'.\n\n"
+
         "For each concept provide:\n"
         "- a short label\n"
         "- a one-line description\n"
         "- a parent 'topic': a broader subject heading that groups "
         "related concepts together (e.g. multiple concepts can share "
-        "the same topic)\n\n"
+        "the same topic)\n"
+        "- an optional 'subtopic': a finer grouping within that topic, "
+        "only if the material naturally splits into sections under it. "
+        "Leave as an empty string when 'topic' alone is specific enough.\n"
+        "- 'prerequisites': labels of OTHER concepts in this same list "
+        "that a student should understand first before this one. Use "
+        "the exact label text of those other concepts. Leave empty if "
+        "this concept has no prerequisites among the others.\n"
+        "- 'source_chunk_index': the NUMBER from the '[[CHUNK N]]' "
+        "marker of whichever chunk this concept is primarily discussed "
+        "in. Use the exact number shown in that chunk's marker.\n\n"
 
         "Merge overlapping concepts instead of repeating them.\n\n"
 
@@ -484,8 +547,20 @@ async def extract_concepts(
         :MAX_QUIZ_CONCEPTS
     ]
 
+    valid_indices = set(included_chunk_indices)
+    fallback_index = (
+        included_chunk_indices[0]
+        if included_chunk_indices
+        else 0
+    )
+
     for draft in drafts:
-        draft.source_chunk_index = 0
+
+        # Gemini is instructed to report the real chunk marker, but
+        # fall back safely if it hallucinates an index that wasn't
+        # actually shown to it.
+        if draft.source_chunk_index not in valid_indices:
+            draft.source_chunk_index = fallback_index
 
     return drafts
 
@@ -513,6 +588,8 @@ async def deduplicate_concepts(
 
     seen_labels = set()
 
+    kept_drafts = []
+
     for draft in concept_drafts[
         :MAX_QUIZ_CONCEPTS
     ]:
@@ -529,16 +606,35 @@ async def deduplicate_concepts(
 
         seen_labels.add(key)
 
+        kept_drafts.append((label, draft))
+
+    # Prerequisites may reference labels that got merged away above,
+    # or a concept's own label (self-reference) — drop anything that
+    # doesn't resolve to another concept that actually survived.
+    for label, draft in kept_drafts:
+
         locator = locator_by_index.get(
             draft.source_chunk_index,
             "",
         )
+
+        own_key = label.lower()
+
+        prerequisites = [
+            p.strip()
+            for p in draft.prerequisites
+            if p.strip()
+            and p.strip().lower() != own_key
+            and p.strip().lower() in seen_labels
+        ]
 
         final_concepts.append(
             Concept(
                 label=label,
                 description=draft.description.strip(),
                 topic=(draft.topic or "General").strip(),
+                subtopic=(draft.subtopic or "").strip(),
+                prerequisites=prerequisites,
                 source_chunk_indices=[
                     draft.source_chunk_index
                 ],
