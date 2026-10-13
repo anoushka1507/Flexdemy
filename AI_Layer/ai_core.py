@@ -1402,6 +1402,7 @@ async def answer_grounded_question(
             chunk_index=chunk.chunk_index,
             locator=chunk.locator,
             excerpt=chunk.text[:280],
+            source_type=chunk.source_type,
         )
         for chunk, _score in top_matches
     ]

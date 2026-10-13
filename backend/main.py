@@ -6,6 +6,7 @@ from fastapi import (
     HTTPException,
     Form,
 )
+from fastapi.responses import Response
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -666,6 +667,12 @@ async def start_adaptive_quiz(
         # Read material.
         # ----------------------------------------------------
 
+        # Keep a copy of the original bytes so a citation can later
+        # open the actual source file (PDF page, video timestamp),
+        # not just show its locator as text.
+        raw_bytes = await file.read()
+        await file.seek(0)
+
         chunks = await read_uploaded_material(
             file
         )
@@ -793,6 +800,9 @@ async def start_adaptive_quiz(
         materials[session_id] = {
             "chunks": chunks,
             "embeddings": None,
+            "raw_bytes": raw_bytes,
+            "content_type": file.content_type or "application/octet-stream",
+            "filename": file.filename or "material",
         }
 
 
@@ -1365,6 +1375,32 @@ async def grounded_chat_api(
                 )
 
     return response.model_dump()
+
+
+# ============================================================
+# SOURCE FILE SERVING (for citation "open at location" links)
+# ============================================================
+
+@app.get("/materials/{session_id}/file")
+async def material_file_api(session_id: str):
+
+    material = materials.get(session_id)
+
+    if material is None or "raw_bytes" not in material:
+        raise HTTPException(
+            status_code=404,
+            detail="No source file found for this session.",
+        )
+
+    return Response(
+        content=material["raw_bytes"],
+        media_type=material["content_type"],
+        headers={
+            "Content-Disposition": (
+                f'inline; filename="{material["filename"]}"'
+            ),
+        },
+    )
 
 
 # ============================================================

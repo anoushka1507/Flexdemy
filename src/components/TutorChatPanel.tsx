@@ -1,10 +1,34 @@
 import React, { useState } from 'react';
-import { GroundedChatMessage } from '../types';
+import { GroundedChatMessage, Citation } from '../types';
 
 interface TutorChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
   sessionId?: string;
+}
+
+// Source files don't have a native "jump to location" viewer for
+// every type (no in-browser slide renderer), so this only returns a
+// URL for the types where a real browser-native jump is possible:
+// a PDF page (#page=N) or a video timestamp (#t=seconds). Slides and
+// plain text fall back to the locator staying as display-only text.
+function getSourceJumpUrl(sessionId: string, citation: Citation): string | null {
+  const base = `/api/materials/${sessionId}/file`;
+
+  if (citation.sourceType === 'pdf') {
+    const match = citation.locator.match(/Page (\d+)/);
+    if (match) return `${base}#page=${match[1]}`;
+  }
+
+  if (citation.sourceType === 'video') {
+    const match = citation.locator.match(/^(\d{1,2}):(\d{2})/);
+    if (match) {
+      const seconds = Number(match[1]) * 60 + Number(match[2]);
+      return `${base}#t=${seconds}`;
+    }
+  }
+
+  return null;
 }
 
 export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
@@ -70,6 +94,7 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
             chunkIndex: c.chunk_index,
             locator: c.locator,
             excerpt: c.excerpt,
+            sourceType: c.source_type || 'text',
           })),
         },
       ]);
@@ -127,15 +152,40 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
 
                 {message.citations && message.citations.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
-                    {message.citations.map((c, cIdx) => (
-                      <span
-                        key={cIdx}
-                        className="text-[10px] font-semibold text-[#7372A5] bg-white px-2 py-0.5 rounded-full border border-[#d8d7e8]"
-                        title={c.excerpt}
-                      >
-                        {c.locator}
-                      </span>
-                    ))}
+                    {message.citations.map((c, cIdx) => {
+                      const jumpUrl = sessionId
+                        ? getSourceJumpUrl(sessionId, c)
+                        : null;
+
+                      const className =
+                        'text-[10px] font-semibold text-[#7372A5] bg-white px-2 py-0.5 rounded-full border border-[#d8d7e8]' +
+                        (jumpUrl ? ' hover:bg-[#ececf4] cursor-pointer underline decoration-dotted' : '');
+
+                      if (jumpUrl) {
+                        return (
+                          <a
+                            key={cIdx}
+                            href={jumpUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={className}
+                            title={`${c.excerpt}\n\nClick to open source`}
+                          >
+                            {c.locator}
+                          </a>
+                        );
+                      }
+
+                      return (
+                        <span
+                          key={cIdx}
+                          className={className}
+                          title={c.excerpt}
+                        >
+                          {c.locator}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>
