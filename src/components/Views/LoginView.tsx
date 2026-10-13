@@ -250,7 +250,18 @@ const [loading, setLoading] = useState(false);
             Continue with Google
           </button>
 
-         
+          <button
+            type="button"
+            onClick={() => setCurrentView('dashboard')}
+            className="w-full mt-2 py-2.5 rounded-xl border border-dashed border-gray-300 hover:bg-gray-50 flex items-center justify-center gap-2 text-xs font-bold text-gray-500 transition-colors"
+          >
+            <span className="material-symbols-outlined text-base">person_outline</span>
+            Continue as Guest
+          </button>
+          <p className="text-[10px] text-gray-400 text-center mt-1">
+            No account, no saved progress across sessions
+          </p>
+
         </div>
 
       </main>

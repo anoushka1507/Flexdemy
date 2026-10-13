@@ -485,7 +485,7 @@ async def read_uploaded_material(
 
         from AI_Layer.ai_core import extract_slide_deck
 
-        return extract_slide_deck(
+        return await extract_slide_deck(
             file_bytes,
             file.filename or "",
         )

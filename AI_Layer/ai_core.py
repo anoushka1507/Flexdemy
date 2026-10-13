@@ -114,6 +114,65 @@ def with_retry(
 
 
 # ============================================================
+# IMAGE / DIAGRAM CAPTIONING
+# ============================================================
+
+# Skip tiny embedded images (icons, bullets, logos) that aren't
+# worth a Gemini call — real diagrams/figures are comfortably
+# larger than this.
+MIN_CAPTIONABLE_IMAGE_BYTES = 3000
+
+# Hard cap on vision calls per upload so a slide-heavy deck or a
+# scanned textbook can't quietly burn through the whole quota.
+MAX_CAPTIONED_IMAGES_PER_UPLOAD = 15
+
+
+async def caption_image(
+    image_bytes: bytes,
+    mime_type: str = "image/png",
+) -> str:
+    """
+    One-line description of an embedded image/diagram/figure, so
+    its content becomes part of the searchable, citable chunk text
+    instead of being invisible to ingestion. Best-effort: returns
+    "" on any failure rather than breaking extraction.
+    """
+
+    if client is None or len(image_bytes) < MIN_CAPTIONABLE_IMAGE_BYTES:
+        return ""
+
+    try:
+        response = await client.aio.models.generate_content(
+            model=MODEL_TEXT,
+            contents=[
+                "In one short sentence, describe what this image, "
+                "diagram, chart, or figure shows, for a student "
+                "studying this material. If it's purely decorative "
+                "(a logo, icon, or divider) with no educational "
+                "content, respond with exactly: SKIP",
+                genai.types.Part.from_bytes(
+                    data=image_bytes,
+                    mime_type=mime_type,
+                ),
+            ],
+            config=genai.types.GenerateContentConfig(
+                temperature=0.0
+            ),
+        )
+
+        caption = (response.text or "").strip()
+
+        if not caption or caption.upper() == "SKIP":
+            return ""
+
+        return caption
+
+    except Exception as e:
+        logger.warning("caption_image failed: %s", e)
+        return ""
+
+
+# ============================================================
 # PDF EXTRACTION
 # ============================================================
 
@@ -141,12 +200,51 @@ async def extract_and_chunk(
 
         OVERLAP_WORDS = 150
 
+        images_captioned = 0
+
         for page_num, page in enumerate(
             reader.pages,
             1,
         ):
 
-            text = page.extract_text()
+            text = page.extract_text() or ""
+
+            # Describe embedded images/diagrams/figures so their
+            # content is actually searchable and citable, not just
+            # invisible to ingestion. Capped globally so an
+            # image-heavy PDF can't exhaust the Gemini quota.
+            image_captions = []
+
+            if images_captioned < MAX_CAPTIONED_IMAGES_PER_UPLOAD:
+
+                try:
+                    page_images = list(page.images)
+                except Exception:
+                    page_images = []
+
+                for img in page_images:
+
+                    if images_captioned >= MAX_CAPTIONED_IMAGES_PER_UPLOAD:
+                        break
+
+                    pil_format = (
+                        getattr(img.image, "format", None) or "PNG"
+                    ).lower()
+
+                    caption = await caption_image(
+                        img.data,
+                        mime_type=f"image/{pil_format}",
+                    )
+
+                    images_captioned += 1
+
+                    if caption:
+                        image_captions.append(
+                            f"[Figure on page {page_num}: {caption}]"
+                        )
+
+            if image_captions:
+                text = (text + "\n" + "\n".join(image_captions)).strip()
 
             if not text:
                 continue
@@ -318,16 +416,19 @@ def extract_text_and_chunk(
 # SLIDE DECK EXTRACTION (.pptx)
 # ============================================================
 
-def extract_slide_deck(
+async def extract_slide_deck(
     pptx_bytes: bytes,
     source_filename: str = "",
 ) -> list[Chunk]:
 
     from pptx import Presentation
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
 
     prs = Presentation(io.BytesIO(pptx_bytes))
 
     chunks = []
+
+    images_captioned = 0
 
     for slide_number, slide in enumerate(prs.slides, 1):
 
@@ -345,6 +446,33 @@ def extract_slide_deck(
                             cell.text.strip()
                             for cell in row.cells
                         )
+                    )
+
+            # Describe embedded images/diagrams/figures so their
+            # content is searchable and citable, not invisible to
+            # ingestion. Capped globally per upload.
+            if (
+                shape.shape_type == MSO_SHAPE_TYPE.PICTURE
+                and images_captioned < MAX_CAPTIONED_IMAGES_PER_UPLOAD
+            ):
+
+                try:
+                    image = shape.image
+                    caption = await caption_image(
+                        image.blob,
+                        mime_type=image.content_type or "image/png",
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "slide image captioning failed: %s", e
+                    )
+                    caption = ""
+
+                images_captioned += 1
+
+                if caption:
+                    texts.append(
+                        f"[Figure on slide {slide_number}: {caption}]"
                     )
 
         slide_text = "\n".join(texts).strip()
