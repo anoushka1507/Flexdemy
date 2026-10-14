@@ -73,7 +73,7 @@ MODEL_TEXT = "gemini-3.1-flash-lite"
 # quota issue). A different model doesn't share the free-tier quota
 # that 429s come from, so this is a genuine way out of an outage
 # instead of just retrying into the same wall.
-MODEL_TEXT_FALLBACK = "gemini-2.5-flash"
+MODEL_TEXT_FALLBACK = "gemini-3.8-flash"
 
 MAX_QUIZ_CONCEPTS = 8
 
