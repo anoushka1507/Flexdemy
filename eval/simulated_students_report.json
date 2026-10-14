@@ -1,0 +1,43 @@
+{
+  "profile": "strong_student",
+  "target_correct_probability": 0.9,
+  "n_sessions": 2,
+  "mastery_before": {
+    "Test Topic Fix Verification": 0.51
+  },
+  "mastery_after": {
+    "Test Topic Fix Verification": 0.51,
+    "Software Measurement": 0.51,
+    "Software Development Concepts": 0.657,
+    "Software Engineering Fundamentals": 0.8319300000000001
+  },
+  "sessions": [
+    {
+      "n_questions": 4,
+      "first_half_accuracy": 1.0,
+      "second_half_accuracy": 1.0,
+      "difficulty_trajectory": [
+        "medium",
+        "medium",
+        "hard",
+        "hard"
+      ],
+      "question_repetition_rate": 0.0,
+      "cross_session_repeats": 0
+    },
+    {
+      "n_questions": 4,
+      "first_half_accuracy": 1.0,
+      "second_half_accuracy": 1.0,
+      "difficulty_trajectory": [
+        "medium",
+        "medium",
+        "hard",
+        "hard"
+      ],
+      "question_repetition_rate": 0.0,
+      "cross_session_repeats": 0
+    }
+  ],
+  "total_cross_session_repeats": 0
+}
