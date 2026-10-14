@@ -99,18 +99,22 @@ def question_hash(topic: str, question_text: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-async def fetch_mastery(client: Client | None) -> dict[str, float]:
+async def fetch_mastery(client: Client | None) -> dict[str, dict]:
 
     if client is None:
         return {}
 
     try:
         result = client.table("topic_mastery").select(
-            "topic, mastery_score"
+            "topic, mastery_score, times_seen, last_updated"
         ).execute()
 
         return {
-            row["topic"]: row["mastery_score"]
+            row["topic"]: {
+                "mastery_score": row["mastery_score"],
+                "times_seen": row["times_seen"],
+                "last_updated": row["last_updated"],
+            }
             for row in (result.data or [])
         }
 
