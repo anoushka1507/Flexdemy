@@ -124,10 +124,20 @@ export default function App() {
         const response = await fetch('/api/quiz-history', {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (!response.ok || !mounted) return;
+
+        if (!response.ok) {
+          console.error(
+            'Quiz history fetch failed:',
+            response.status,
+            await response.text()
+          );
+          return;
+        }
+        if (!mounted) return;
 
         const data = await response.json();
         const rows: any[] = data.history || [];
+        console.log('Quiz history loaded:', rows.length, 'entries');
         if (rows.length === 0) return;
 
         const results: QuizResult[] = rows.map((row) => ({
@@ -250,9 +260,14 @@ export default function App() {
       try {
         const { data: sessionData } = await supabase.auth.getSession();
         const accessToken = sessionData.session?.access_token;
-        if (!accessToken) return;
+        if (!accessToken) {
+          console.warn(
+            'Quiz result not saved: no active session (guest mode?).'
+          );
+          return;
+        }
 
-        await fetch('/api/record-quiz-result', {
+        const saveResponse = await fetch('/api/record-quiz-result', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -268,9 +283,18 @@ export default function App() {
             correct_answers_count: result.correctAnswersCount,
           }),
         });
-      } catch {
-        // Best-effort — local state (set below) still shows the
-        // result for this session even if the save failed.
+
+        if (!saveResponse.ok) {
+          console.error(
+            'Quiz result save failed:',
+            saveResponse.status,
+            await saveResponse.text()
+          );
+        } else {
+          console.log('Quiz result saved:', await saveResponse.json());
+        }
+      } catch (err) {
+        console.error('Quiz result save threw an error:', err);
       }
     })();
 
