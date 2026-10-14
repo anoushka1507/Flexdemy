@@ -7,6 +7,12 @@ const isAiQuestion = (q: { backendQuestion?: Record<string, unknown> }) =>
 const isMcq = (q: { questionType?: string }) =>
   !q.questionType || q.questionType === 'mcq';
 
+interface Flashcard {
+  front: string;
+  back: string;
+  source_locator: string;
+}
+
 interface ResultsViewProps {
   quizResult: QuizResult;
   quiz: Quiz;
@@ -15,6 +21,7 @@ interface ResultsViewProps {
   setDyslexiaMode: (enabled: boolean) => void;
   onRetakeQuiz: () => void;
   onStartAnotherQuiz: () => void;
+  sessionId?: string;
 }
 
 export const ResultsView: React.FC<ResultsViewProps> = ({
@@ -25,8 +32,56 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
   setDyslexiaMode,
   onRetakeQuiz,
   onStartAnotherQuiz,
+  sessionId,
 }) => {
   const [activeTab, setActiveTab] = useState<'review' | 'insights'>('review');
+  const [flashcardsByTopic, setFlashcardsByTopic] = useState<
+    Record<string, Flashcard[]>
+  >({});
+  const [flashcardsLoading, setFlashcardsLoading] = useState<
+    Record<string, boolean>
+  >({});
+  const [flashcardsError, setFlashcardsError] = useState<
+    Record<string, string>
+  >({});
+  const [flippedCards, setFlippedCards] = useState<Record<string, boolean>>(
+    {}
+  );
+
+  const fetchFlashcards = async (topic: string) => {
+    if (!sessionId || flashcardsLoading[topic]) return;
+
+    setFlashcardsLoading((prev) => ({ ...prev, [topic]: true }));
+    setFlashcardsError((prev) => ({ ...prev, [topic]: '' }));
+
+    try {
+      const response = await fetch('/api/generate-flashcards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: sessionId, topic, count: 5 }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not generate flashcards for this topic.');
+      }
+
+      const data = await response.json();
+      setFlashcardsByTopic((prev) => ({
+        ...prev,
+        [topic]: data.flashcards || [],
+      }));
+    } catch (err) {
+      setFlashcardsError((prev) => ({
+        ...prev,
+        [topic]:
+          err instanceof Error
+            ? err.message
+            : 'Could not generate flashcards.',
+      }));
+    } finally {
+      setFlashcardsLoading((prev) => ({ ...prev, [topic]: false }));
+    }
+  };
 
   const [explanations, setExplanations] = useState<
     Record<number, { text: string; sourceLocator: string; topic: string }>
@@ -470,6 +525,60 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                         style={{ width: `${topic.masteryPercentage}%` }}
                       />
                     </div>
+
+                    {topic.masteryPercentage < 75 && sessionId && (
+                      <div className="pt-1">
+                        {!flashcardsByTopic[topic.topicName] ? (
+                          <button
+                            onClick={() => fetchFlashcards(topic.topicName)}
+                            disabled={flashcardsLoading[topic.topicName]}
+                            className="text-[11px] font-bold text-[#7372A5] underline disabled:opacity-50"
+                          >
+                            {flashcardsLoading[topic.topicName]
+                              ? 'Generating flashcards...'
+                              : 'Get revision flashcards'}
+                          </button>
+                        ) : (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+                            {flashcardsByTopic[topic.topicName].map((card, idx) => {
+                              const key = `${topic.topicName}-${idx}`;
+                              const flipped = flippedCards[key];
+                              return (
+                                <button
+                                  key={key}
+                                  onClick={() =>
+                                    setFlippedCards((prev) => ({
+                                      ...prev,
+                                      [key]: !prev[key],
+                                    }))
+                                  }
+                                  className="text-left bg-[#f6f6fa] hover:bg-[#ececf4] border border-[#d8d7e8] rounded-xl p-3 text-[11px] text-[#222138] min-h-[70px]"
+                                >
+                                  {flipped ? (
+                                    <>
+                                      <p>{card.back}</p>
+                                      {card.source_locator && (
+                                        <p className="mt-1 text-[10px] text-[#7372A5] font-bold">
+                                          Source: {card.source_locator}
+                                        </p>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <p className="font-semibold">{card.front}</p>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {flashcardsError[topic.topicName] && (
+                          <p className="text-[11px] text-rose-600 mt-1">
+                            {flashcardsError[topic.topicName]}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
             </div>
