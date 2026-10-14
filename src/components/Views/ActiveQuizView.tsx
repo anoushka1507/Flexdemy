@@ -4,6 +4,8 @@ import React, {
 } from 'react';
 
 import { TutorChatPanel } from '../../components/TutorChatPanel';
+import { ReadAloudControls } from '../ReadAloudControls';
+import { speechController } from '../../utils/speechController';
 import { apiFetch } from '../../utils/api';
 
 // @ts-ignore
@@ -260,42 +262,48 @@ export const ActiveQuizView: React.FC<
     // syllables like "vi" as isolated Roman numerals (e.g., reading "6")
     const syllabifiedText = syllables.join('-'); 
 
-    const utterance = new SpeechSynthesisUtterance(syllabifiedText);
-    utterance.lang = "en-US";
-    utterance.rate = 0.3; // Very slow for dyslexic comprehension
-    utterance.onend = () => setSpokenHighlight(null);
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utterance);
+    const passageId = `quiz-word-${currentQuestion.id}-${type}-${optIndex}-${wordIndex}`;
+    speechController.play(passageId, syllabifiedText, {
+      rate: 0.3,
+      lang: 'en-US',
+      onEnd: () => setSpokenHighlight(null),
+      onError: () => setSpokenHighlight(null),
+    });
   };
 
   const speakFullQuestion = () => {
-    window.speechSynthesis.cancel();
     setSpokenHighlight(null);
 
     const qWords = currentQuestion.question.split(' ');
     const qCharMap: number[] = [];
     let qc = 0, qw = 0;
     for (const word of qWords) {
-        for (let i = 0; i < word.length; i++) qCharMap[qc++] = qw;
-        qCharMap[qc++] = qw; // space
-        qw++;
+      for (let i = 0; i < word.length; i++) qCharMap[qc++] = qw;
+      qCharMap[qc++] = qw; // space
+      qw++;
     }
 
-    const qUtterance = new SpeechSynthesisUtterance(currentQuestion.question);
-    qUtterance.lang = "en-US";
-    qUtterance.rate = speechSpeed; 
+    const UtteranceCtor =
+      (window as any).SpeechSynthesisUtterance ||
+      (globalThis as any).SpeechSynthesisUtterance;
+    if (!UtteranceCtor) return;
 
-    qUtterance.onboundary = (e) => {
-        if (e.name === 'word') {
-            const idx = qCharMap[e.charIndex];
-            if (idx !== undefined) {
-                setSpokenHighlight({ type: 'question', wordIndex: idx });
-            }
+    const qUtterance = new UtteranceCtor(currentQuestion.question);
+    qUtterance.lang = 'en-US';
+    qUtterance.rate = dyslexiaMode ? speechSpeed : 1.0;
+
+    qUtterance.onboundary = (e: SpeechSynthesisEvent) => {
+      if (e.name === 'word') {
+        const idx = qCharMap[e.charIndex];
+        if (idx !== undefined) {
+          setSpokenHighlight({ type: 'question', wordIndex: idx });
         }
+      }
     };
 
     const optionUtterances: SpeechSynthesisUtterance[] = [];
-    currentQuestion.options.forEach((opt, optIndex) => {
+    if (isMcqQuestion && currentQuestion.options) {
+      currentQuestion.options.forEach((opt, optIndex) => {
         const prefix = `Option ${['A', 'B', 'C', 'D', 'E'][optIndex]}: `;
         const prefixLen = prefix.length;
 
@@ -303,58 +311,53 @@ export const ActiveQuizView: React.FC<
         const optCharMap: number[] = [];
         let cc = 0, ww = 0;
         for (const word of optWords) {
-            for (let i = 0; i < word.length; i++) optCharMap[cc++] = ww;
-            optCharMap[cc++] = ww; 
-            ww++;
+          for (let i = 0; i < word.length; i++) optCharMap[cc++] = ww;
+          optCharMap[cc++] = ww;
+          ww++;
         }
 
-        const oUtt = new SpeechSynthesisUtterance(prefix + opt);
-        oUtt.lang = "en-US";
-        oUtt.rate = speechSpeed;
-        oUtt.onboundary = (e) => {
-            if (e.name === 'word') {
-                const adj = e.charIndex - prefixLen;
-                if (adj >= 0) {
-                    const idx = optCharMap[adj];
-                    if (idx !== undefined) {
-                        setSpokenHighlight({ type: 'option', optIndex, wordIndex: idx });
-                    }
-                } else {
-                    setSpokenHighlight(null);
-                }
+        const oUtt = new UtteranceCtor(prefix + opt);
+        oUtt.lang = 'en-US';
+        oUtt.rate = dyslexiaMode ? speechSpeed : 1.0;
+        oUtt.onboundary = (e: SpeechSynthesisEvent) => {
+          if (e.name === 'word') {
+            const adj = e.charIndex - prefixLen;
+            if (adj >= 0) {
+              const idx = optCharMap[adj];
+              if (idx !== undefined) {
+                setSpokenHighlight({ type: 'option', optIndex, wordIndex: idx });
+              }
+            } else {
+              setSpokenHighlight(null);
             }
+          }
         };
         optionUtterances.push(oUtt);
+      });
+    }
+
+    const passageId = `quiz-question-${currentQuestion.id}`;
+    speechController.playChained(passageId, [qUtterance, ...optionUtterances], {
+      onEnd: () => setSpokenHighlight(null),
+      onError: () => setSpokenHighlight(null),
     });
-
-    qUtterance.onend = () => {
-        setSpokenHighlight(null);
-        if (optionUtterances.length > 0) window.speechSynthesis.speak(optionUtterances[0]);
-    };
-
-    for (let i = 0; i < optionUtterances.length - 1; i++) {
-        optionUtterances[i].onend = () => {
-            setSpokenHighlight(null);
-            window.speechSynthesis.speak(optionUtterances[i+1]);
-        };
-    }
-    
-    if (optionUtterances.length > 0) {
-        optionUtterances[optionUtterances.length - 1].onend = () => setSpokenHighlight(null);
-    }
-
-    window.speechSynthesis.speak(qUtterance);
   };
 
-  // Stop any in-progress read-aloud when moving to a different
-  // question, and when leaving this screen entirely (closing the
-  // quiz, submitting, navigating away) — previously it kept talking
-  // right through both of those.
+  // Stop in-progress read-aloud when moving to a different question,
+  // or when leaving this view completely
   useEffect(() => {
     return () => {
-      window.speechSynthesis.cancel();
+      speechController.stop();
+      setSpokenHighlight(null);
     };
   }, [currentQuestionIndex]);
+
+  useEffect(() => {
+    return () => {
+      speechController.stop();
+      setSpokenHighlight(null);
+    };
+  }, []);
 
   // ----------------------------------------------------------
   // OPTION SELECTION
@@ -1248,34 +1251,30 @@ export const ActiveQuizView: React.FC<
                 {currentQuestionIndex + 1}
               </span>
 
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-3 flex-wrap justify-end">
                 {dyslexiaMode && (
-                  <>
-                    <select
-                      className="text-xs font-bold text-[#7372A5] bg-[#ececf4] border-none rounded-xl px-2 py-1.5 outline-none cursor-pointer hover:bg-[#d8d7e8] transition-colors"
-                      value={speechSpeed}
-                      onChange={(e) => {
-                        setSpeechSpeed(parseFloat(e.target.value));
-                        window.speechSynthesis.cancel();
-                        setSpokenHighlight(null);
-                      }}
-                    >
-                      <option value={0.5}>0.5x Speed</option>
-                      <option value={0.75}>0.75x Speed</option>
-                      <option value={0.85}>0.85x Speed (Default)</option>
-                      <option value={1.0}>1x Speed</option>
-                    </select>
-
-                    <button
-                      onClick={speakFullQuestion}
-                      className="flex items-center gap-1.5 text-xs font-bold text-white bg-[#7372A5] hover:bg-[#585785] hover:scale-105 px-3 py-1.5 rounded-xl transition-all shadow-sm"
-                    >
-                       Read Aloud
-                    </button>
-                  </>
+                  <select
+                    aria-label="Select speech speed"
+                    title="Speech Speed"
+                    className="text-xs font-bold text-[#7372A5] bg-[#ececf4] border border-[#d8d7e8] rounded-xl px-2.5 py-1.5 outline-none cursor-pointer hover:bg-[#d8d7e8] transition-colors"
+                    value={speechSpeed}
+                    onChange={(e) => {
+                      setSpeechSpeed(parseFloat(e.target.value));
+                      speechController.stop();
+                      setSpokenHighlight(null);
+                    }}
+                  >
+                    <option value={0.5}>0.5x Speed</option>
+                    <option value={0.75}>0.75x Speed</option>
+                    <option value={0.85}>0.85x Speed (Default)</option>
+                    <option value={1.0}>1x Speed</option>
+                  </select>
                 )}
 
-                
+                <ReadAloudControls
+                  passageId={`quiz-question-${currentQuestion.id}`}
+                  onPlay={speakFullQuestion}
+                />
               </div>
 
             </div>

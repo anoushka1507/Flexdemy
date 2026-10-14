@@ -1,6 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GroundedChatMessage, Citation } from '../types';
 import { apiFetch } from '../utils/api';
+import { ReadAloudControls } from './ReadAloudControls';
+import { speechController } from '../utils/speechController';
+import { useSpeechController } from '../hooks/useSpeechController';
 
 export type ChatLanguage = 'english' | 'hindi';
 export type AnswerStyle = 'concise' | 'step-by-step' | 'example-first';
@@ -49,8 +52,6 @@ const SpeechRecognitionCtor: any =
       (window as any).webkitSpeechRecognition)) ||
   null;
 
-const speechSynthesisSupported =
-  typeof window !== 'undefined' && 'speechSynthesis' in window;
 
 function getSourceJumpUrl(sessionId: string, citation: Citation): string | null {
   const base = `/api/materials/${sessionId}/file`;
@@ -114,8 +115,8 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
   const [audioFileName, setAudioFileName] = useState<string | null>(null);
   const audioInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Text-to-Speech State
-  const [speakingMessageIndex, setSpeakingMessageIndex] = useState<number | null>(null);
+  // Shared Speech Controller State
+  const { playbackState } = useSpeechController();
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const currentSessionRef = useRef<string | undefined>(sessionId);
@@ -157,10 +158,7 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
         }
         setIsListening(false);
       }
-      if (speechSynthesisSupported) {
-        window.speechSynthesis.cancel();
-        setSpeakingMessageIndex(null);
-      }
+      speechController.stop();
     }
   }, [isOpen, isListening]);
 
@@ -173,9 +171,7 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
           // ignore
         }
       }
-      if (speechSynthesisSupported) {
-        window.speechSynthesis.cancel();
-      }
+      speechController.stop();
     };
   }, []);
 
@@ -185,28 +181,6 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, loading, isOpen]);
-
-  // Read aloud helper
-  const handleToggleSpeech = (text: string, index: number) => {
-    if (!speechSynthesisSupported) return;
-
-    if (speakingMessageIndex === index) {
-      window.speechSynthesis.cancel();
-      setSpeakingMessageIndex(null);
-      return;
-    }
-
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    const activeLangConfig = SUPPORTED_LANGUAGES.find((l) => l.id === language);
-    utterance.lang = activeLangConfig?.speechLocale || 'en-US';
-
-    utterance.onend = () => setSpeakingMessageIndex(null);
-    utterance.onerror = () => setSpeakingMessageIndex(null);
-
-    setSpeakingMessageIndex(index);
-    window.speechSynthesis.speak(utterance);
-  };
 
   // Browser speech recognition
   const handleToggleListening = () => {
@@ -496,16 +470,13 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
               </span>
             </div>
 
-            {/* Global TTS Stop if currently speaking */}
-            {speechSynthesisSupported && speakingMessageIndex !== null && (
+            {/* Global TTS Stop if currently speaking or paused */}
+            {playbackState !== 'idle' && (
               <button
                 type="button"
-                onClick={() => {
-                  window.speechSynthesis.cancel();
-                  setSpeakingMessageIndex(null);
-                }}
+                onClick={() => speechController.stop()}
                 title="Stop reading aloud"
-                className="w-7 h-7 rounded-lg bg-rose-500/80 hover:bg-rose-500 text-white flex items-center justify-center transition-colors"
+                className="w-7 h-7 rounded-lg bg-rose-500/80 hover:bg-rose-500 text-white flex items-center justify-center transition-colors shadow-xs"
                 aria-label="Stop reading aloud"
               >
                 <span className="material-symbols-outlined text-base">stop_circle</span>
@@ -615,26 +586,20 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
               >
                 <div className="flex items-start gap-2">
                   <p className="whitespace-pre-wrap flex-1 leading-relaxed">{message.text}</p>
-                  {message.role === 'model' && speechSynthesisSupported && (
-                    <button
-                      type="button"
-                      onClick={() => handleToggleSpeech(message.text, idx)}
-                      title={
-                        speakingMessageIndex === idx
-                          ? 'Stop reading aloud'
-                          : 'Read this answer aloud'
-                      }
-                      aria-label="Read answer aloud"
-                      className={`shrink-0 p-1 rounded-md transition-colors ${
-                        speakingMessageIndex === idx
-                          ? 'text-rose-600 bg-white'
-                          : 'text-gray-400 hover:text-[#7372A5]'
-                      }`}
-                    >
-                      <span className="material-symbols-outlined text-sm">
-                        {speakingMessageIndex === idx ? 'volume_off' : 'volume_up'}
-                      </span>
-                    </button>
+                  {message.role === 'model' && (
+                    <div className="shrink-0 pt-0.5">
+                      <ReadAloudControls
+                        passageId={`tutor-msg-${idx}`}
+                        onPlay={() => {
+                          const activeLangConfig = SUPPORTED_LANGUAGES.find((l) => l.id === language);
+                          speechController.play(`tutor-msg-${idx}`, message.text, {
+                            lang: activeLangConfig?.speechLocale || 'en-US',
+                            rate: 0.95,
+                          });
+                        }}
+                        compact
+                      />
+                    </div>
                   )}
                 </div>
 
