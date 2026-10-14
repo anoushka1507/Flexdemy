@@ -68,6 +68,7 @@ from backend.supabase_client import (
     fetch_asked_question_texts,
     fetch_mastery,
     get_user_client,
+    get_user_id,
     load_quiz_material_data,
     load_quiz_session_data,
     record_asked_question,
@@ -396,6 +397,7 @@ async def generate_next_question(
     session: AdaptiveSession,
     sb_client=None,
     question_types: list[str] | None = None,
+    user_id: str | None = None,
 ):
 
     from AI_Layer.ai_core import (
@@ -472,6 +474,7 @@ async def generate_next_question(
         sb_client,
         concept.topic,
         question.question_text,
+        user_id=user_id,
     )
 
 
@@ -737,6 +740,7 @@ async def start_adaptive_quiz(
 ):
 
     sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
 
     requested_types = [
         t.strip()
@@ -938,6 +942,7 @@ async def start_adaptive_quiz(
             session,
             sb_client=sb_client,
             question_types=requested_types,
+            user_id=user_id,
         )
 
         # Save AFTER Q1 is generated so the persisted session
@@ -1007,6 +1012,7 @@ async def record_answer_and_advance(
     was_correct: bool,
     sb_client=None,
     extra_fields: dict | None = None,
+    user_id: str | None = None,
 ):
 
     # --------------------------------------------------------
@@ -1098,6 +1104,7 @@ async def record_answer_and_advance(
         sb_client,
         topic,
         was_correct,
+        user_id=user_id,
     )
 
     # --------------------------------------------------------
@@ -1151,6 +1158,7 @@ async def record_answer_and_advance(
             session,
             sb_client=sb_client,
             question_types=session.question_types,
+            user_id=user_id,
         )
 
     except Exception as e:
@@ -1245,6 +1253,7 @@ async def answer_adaptive_question(
 ):
 
     sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
 
     session = await get_session(
         request.session_id
@@ -1341,6 +1350,7 @@ async def answer_adaptive_question(
         concept_label,
         was_correct,
         sb_client,
+        user_id=user_id,
     )
 
 
@@ -1361,6 +1371,7 @@ async def answer_adaptive_question_open(
 ):
 
     sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
 
     session = await get_session(
         request.session_id
@@ -1418,6 +1429,7 @@ async def answer_adaptive_question_open(
             "feedback": verification.feedback,
             "source_locator": verification.source_locator,
         },
+        user_id=user_id,
     )
 
 
@@ -1499,12 +1511,14 @@ async def grounded_chat_api(
             if topic:
 
                 sb_client = get_user_client(authorization)
+                chat_user_id = get_user_id(authorization)
 
                 await upsert_mastery(
                     sb_client,
                     topic,
                     is_correct=True,
                     learning_rate=0.05,
+                    user_id=chat_user_id,
                 )
 
     return response.model_dump()
