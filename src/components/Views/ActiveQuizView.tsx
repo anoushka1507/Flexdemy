@@ -142,6 +142,17 @@ export const ActiveQuizView: React.FC<
   ] = useState<Record<number, string>>({});
 
   const [
+    feedbackState,
+    setFeedbackState,
+  ] = useState<Record<number, {
+    isChecked: boolean;
+    wasCorrect: boolean;
+    explanation: string;
+    misconception?: string | null;
+    sourceLocator?: string;
+  }>>({});
+
+  const [
     isTutorChatOpen,
     setIsTutorChatOpen,
   ] = useState(false);
@@ -196,6 +207,7 @@ export const ActiveQuizView: React.FC<
     setShowHint({});
     setSecondsSpent(0);
     setAdaptiveError('');
+    setFeedbackState({});
 
   }, [
   quiz.id,
@@ -344,7 +356,7 @@ export const ActiveQuizView: React.FC<
   optionIndex: number
 ) => {
 
-  if (adaptiveLoading) return;
+  if (adaptiveLoading || feedbackState[currentQuestion.id]?.isChecked) return;
 
   setSelectedAnswers(
     (prev) => ({
@@ -355,6 +367,86 @@ export const ActiveQuizView: React.FC<
   );
 
 };
+
+  const handleCheckCurrentAnswer = () => {
+    if (isMcqQuestion) {
+      const selected = selectedAnswers[currentQuestion.id];
+      if (selected === undefined || selected === null) {
+        setAdaptiveError('Please select an option first.');
+        return;
+      }
+      setAdaptiveError('');
+      const wasCorrect = selected === currentQuestion.correctAnswerIndex;
+      let misconception: string | null = null;
+      const bq = currentQuestion.backendQuestion as any;
+      if (bq?.options && Array.isArray(bq.options)) {
+        misconception = bq.options[selected]?.misconception_tag || null;
+      }
+
+      const explanation =
+        currentQuestion.explanation ||
+        bq?.explanation ||
+        currentQuestion.hint ||
+        (wasCorrect
+          ? 'Great job! Your answer matches the source concept.'
+          : 'Review the cited source below to master this concept.');
+
+      const sourceLocator = currentQuestion.sourceLocator || bq?.source_locator || '';
+
+      setFeedbackState((prev) => ({
+        ...prev,
+        [currentQuestion.id]: {
+          isChecked: true,
+          wasCorrect,
+          explanation,
+          misconception,
+          sourceLocator,
+        },
+      }));
+    } else {
+      const answerText = (openAnswers[currentQuestion.id] || '').trim();
+      if (!answerText) {
+        setAdaptiveError('Please enter an answer first.');
+        return;
+      }
+      setAdaptiveError('');
+
+      const bq = currentQuestion.backendQuestion as any;
+      const expected = bq?.expected_answer || '';
+      let wasCorrect = false;
+
+      if (currentQuestion.questionType === 'numerical') {
+        const numStudent = parseFloat(answerText.replace(/,/g, ''));
+        const numExpected = parseFloat(String(expected).replace(/,/g, ''));
+        const tol = bq?.numerical_tolerance || 0.05;
+        if (!isNaN(numStudent) && !isNaN(numExpected)) {
+          wasCorrect = Math.abs(numStudent - numExpected) <= Math.max(tol, 0.01 * Math.abs(numExpected));
+        }
+      } else {
+        const cleanS = answerText.toLowerCase().trim();
+        const cleanE = String(expected).toLowerCase().trim();
+        wasCorrect = cleanS === cleanE || (cleanE.length > 3 && cleanS.includes(cleanE));
+      }
+
+      const explanation = bq?.explanation || (wasCorrect ? `Correct! Expected: ${expected}` : `Expected: ${expected}`);
+      const sourceLocator = currentQuestion.sourceLocator || bq?.source_locator || '';
+
+      setFeedbackState((prev) => ({
+        ...prev,
+        [currentQuestion.id]: {
+          isChecked: true,
+          wasCorrect,
+          explanation,
+          sourceLocator,
+        },
+      }));
+
+      setAnsweredCorrectly((prev) => ({
+        ...prev,
+        [currentQuestion.id]: wasCorrect,
+      }));
+    }
+  };
 
   const handleClearSelection = () => {
 
@@ -1480,26 +1572,38 @@ export const ActiveQuizView: React.FC<
             <div className="space-y-3 pt-2">
               {currentQuestion.options.map((option, optionIndex) => {
                 const isSelected = selectedAnswers[currentQuestion.id] === optionIndex;
+                const isChecked = Boolean(feedbackState[currentQuestion.id]?.isChecked);
+                const isCorrectOption = optionIndex === currentQuestion.correctAnswerIndex;
                 const letters = ['A', 'B', 'C', 'D', 'E'];
+
+                let optionStyle = 'border-[#d8d7e8] bg-white hover:border-[#7372A5]/50 hover:bg-[#ececf4]/30';
+                let badgeStyle = 'bg-[#ececf4] text-[#7372A5] group-hover:bg-[#d8d7e8]';
+
+                if (isChecked) {
+                  if (isCorrectOption) {
+                    optionStyle = 'border-emerald-500 bg-emerald-50/80 shadow-xs ring-1 ring-emerald-400';
+                    badgeStyle = 'bg-emerald-600 text-white';
+                  } else if (isSelected) {
+                    optionStyle = 'border-rose-500 bg-rose-50/80 shadow-xs ring-1 ring-rose-400';
+                    badgeStyle = 'bg-rose-600 text-white';
+                  } else {
+                    optionStyle = 'border-[#d8d7e8] bg-white opacity-40';
+                  }
+                } else if (isSelected) {
+                  optionStyle = 'border-[#7372A5] bg-[#ececf4] shadow-xs';
+                  badgeStyle = 'bg-[#7372A5] text-white';
+                }
 
                 return (
                   <button
                     key={optionIndex}
-                    disabled={adaptiveLoading}
+                    disabled={adaptiveLoading || isChecked}
                     onClick={() => handleSelectOption(optionIndex)}
-                    className={`w-full min-w-0 p-4 rounded-2xl border-2 text-left transition-all flex items-center justify-between group ${
-                      isSelected
-                        ? 'border-[#7372A5] bg-[#ececf4] shadow-xs'
-                        : 'border-[#d8d7e8] bg-white hover:border-[#7372A5]/50 hover:bg-[#ececf4]/30'
-                    } ${adaptiveLoading ? 'opacity-70' : ''}`}
+                    className={`w-full min-w-0 p-4 rounded-2xl border-2 text-left transition-all flex items-center justify-between group ${optionStyle} ${adaptiveLoading ? 'opacity-70' : ''}`}
                   >
                     <div className="flex items-center gap-3.5 min-w-0 flex-1">
                       <span
-                        className={`w-8 h-8 rounded-xl font-bold text-xs flex items-center justify-center transition-colors ${
-                          isSelected
-                            ? 'bg-[#7372A5] text-white'
-                            : 'bg-[#ececf4] text-[#7372A5] group-hover:bg-[#d8d7e8]'
-                        }`}
+                        className={`w-8 h-8 rounded-xl font-bold text-xs flex items-center justify-center transition-colors ${badgeStyle}`}
                       >
                         {letters[optionIndex]}
                       </span>
@@ -1530,37 +1634,95 @@ export const ActiveQuizView: React.FC<
 
                     <div
                       className={`w-5 h-5 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${
-                        isSelected ? 'border-[#7372A5] bg-[#7372A5]' : 'border-gray-300'
+                        isChecked
+                          ? isCorrectOption
+                            ? 'border-emerald-600 bg-emerald-600 text-white'
+                            : isSelected
+                            ? 'border-rose-600 bg-rose-600 text-white'
+                            : 'border-gray-300'
+                          : isSelected
+                          ? 'border-[#7372A5] bg-[#7372A5]'
+                          : 'border-gray-300'
                       }`}
                     >
-                      {isSelected && (
+                      {isChecked ? (
+                        isCorrectOption ? (
+                          <span className="text-white text-[10px] font-extrabold">✓</span>
+                        ) : isSelected ? (
+                          <span className="text-white text-[10px] font-extrabold">✕</span>
+                        ) : null
+                      ) : isSelected ? (
                         <span className="w-2 h-2 rounded-full bg-white" />
-                      )}
+                      ) : null}
                     </div>
                   </button>
                 );
               })}
             </div>
 
-            {selectedAnswers[
-              currentQuestion.id
-            ] !== undefined &&
-              selectedAnswers[
-                currentQuestion.id
-              ] !== null && (
-
+            {selectedAnswers[currentQuestion.id] !== undefined &&
+              selectedAnswers[currentQuestion.id] !== null &&
+              !feedbackState[currentQuestion.id]?.isChecked && (
                 <button
-                  onClick={
-                    handleClearSelection
-                  }
+                  onClick={handleClearSelection}
                   className="text-xs text-gray-400 underline"
                 >
                   Clear Selection
                 </button>
-
               )}
 
             </>
+            )}
+
+            {/* Immediate Cited Feedback Card (Requirement 3.c & 2.a) */}
+            {feedbackState[currentQuestion.id]?.isChecked && (
+              <div
+                className={`p-5 rounded-2xl border-2 transition-all space-y-3 ${
+                  feedbackState[currentQuestion.id].wasCorrect
+                    ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
+                    : 'bg-rose-50/90 border-rose-300 text-rose-950'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`w-7 h-7 rounded-lg text-white font-extrabold text-xs flex items-center justify-center ${
+                        feedbackState[currentQuestion.id].wasCorrect
+                          ? 'bg-emerald-600'
+                          : 'bg-rose-600'
+                      }`}
+                    >
+                      {feedbackState[currentQuestion.id].wasCorrect ? '✓' : '✕'}
+                    </span>
+                    <h4 className="font-extrabold text-sm">
+                      {feedbackState[currentQuestion.id].wasCorrect
+                        ? 'Correct!'
+                        : 'Incorrect'}
+                    </h4>
+                  </div>
+
+                  {feedbackState[currentQuestion.id].sourceLocator && (
+                    <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-white border border-gray-200 text-[#7372A5] flex items-center gap-1.5 shadow-2xs">
+                      <span className="material-symbols-outlined text-xs">menu_book</span>
+                      <span>Source: {feedbackState[currentQuestion.id].sourceLocator}</span>
+                    </span>
+                  )}
+                </div>
+
+                {feedbackState[currentQuestion.id].misconception && (
+                  <div className="bg-rose-100/90 border border-rose-300 px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-900 flex items-start gap-2">
+                    <span className="text-sm">⚠️</span>
+                    <div>
+                      <span className="font-extrabold block">Identified Misconception:</span>
+                      <span>{feedbackState[currentQuestion.id].misconception}</span>
+                    </div>
+                  </div>
+                )}
+
+                <p className="text-xs font-medium leading-relaxed text-gray-700">
+                  {feedbackState[currentQuestion.id].explanation}
+                </p>
+              </div>
             )}
 
             {adaptiveError && (
@@ -1581,14 +1743,12 @@ export const ActiveQuizView: React.FC<
             <button
               disabled={
                 isAdaptive ||
-                currentQuestionIndex ===
-                  0 ||
+                currentQuestionIndex === 0 ||
                 adaptiveLoading
               }
               onClick={() =>
                 setCurrentQuestionIndex(
-                  (prev) =>
-                    prev - 1
+                  (prev) => prev - 1
                 )
               }
               className="px-5 py-2.5 rounded-xl border border-[#d8d7e8] bg-white font-bold text-xs disabled:opacity-40"
@@ -1597,39 +1757,42 @@ export const ActiveQuizView: React.FC<
             </button>
 
 
-            <button
-              onClick={
-                isAdaptive
-                  ? (isMcqQuestion
-                      ? handleAdaptiveNext
-                      : handleOpenAnswerSubmit)
-                  : handleStaticNext
-              }
-              disabled={
-                adaptiveLoading ||
-                (isMcqQuestion
-                  ? selectedAnswers[
-                      currentQuestion.id
-                    ] === undefined ||
-                    selectedAnswers[
-                      currentQuestion.id
-                    ] === null
-                  : !(
-                      openAnswers[
-                        currentQuestion.id
-                      ] || ''
-                    ).trim())
-              }
-              className="px-6 py-2.5 rounded-xl bg-[#7372A5] text-white font-bold text-xs shadow-md disabled:opacity-50"
-            >
-              {adaptiveLoading
-                ? 'Generating next question...'
-                : currentQuestionIndex <
-                    questions.length - 1 ||
+            {/* Primary Action Button: Check Answer first, then Continue */}
+            {!feedbackState[currentQuestion.id]?.isChecked ? (
+              <button
+                onClick={handleCheckCurrentAnswer}
+                disabled={
+                  adaptiveLoading ||
+                  (isMcqQuestion
+                    ? selectedAnswers[currentQuestion.id] === undefined || selectedAnswers[currentQuestion.id] === null
+                    : !(openAnswers[currentQuestion.id] || '').trim())
+                }
+                className="px-6 py-2.5 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-md disabled:opacity-50 transition-all flex items-center gap-1.5"
+              >
+                <span>Check Answer</span>
+                <span className="material-symbols-outlined text-sm">check_circle</span>
+              </button>
+            ) : (
+              <button
+                onClick={
                   isAdaptive
-                ? 'Next →'
-                : 'Submit Quiz'}
-            </button>
+                    ? (isMcqQuestion
+                        ? handleAdaptiveNext
+                        : handleOpenAnswerSubmit)
+                    : handleStaticNext
+                }
+                disabled={adaptiveLoading}
+                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5"
+              >
+                <span>
+                  {adaptiveLoading
+                    ? 'Processing...'
+                    : currentQuestionIndex < questions.length - 1 || isAdaptive
+                    ? 'Continue to Next Question →'
+                    : 'Submit Quiz'}
+                </span>
+              </button>
+            )}
 
           </div>
 

@@ -112,6 +112,14 @@ class QuestionDraft(BaseModel):
         default="",
         description="Citation target this question was generated from.",
     )
+    explanation: str = Field(
+        default="",
+        description="Detailed educational explanation of why the correct answer is right and why key distractors/misconceptions are wrong.",
+    )
+    hint: str = Field(
+        default="",
+        description="Helpful educational hint guiding the student without giving away the answer.",
+    )
 
 
 class ValidationResult(BaseModel):
@@ -200,6 +208,8 @@ class AdaptiveSession(BaseModel):
     current_question: QuestionDraft | None = None
 
     current_question_number: int | None = None
+
+    is_diagnostic: bool = False
 
     history: list[AdaptiveQuestion] = Field(
         default_factory=list
@@ -325,7 +335,7 @@ class TopicMastery(BaseModel):
         default=0.3,
         ge=0.0,
         le=1.0,
-        description="EMA-smoothed per-topic mastery estimate.",
+        description="Bayesian Knowledge Tracing (BKT) per-topic mastery probability P(L).",
     )
     times_seen: int = 0
     last_updated: str = ""

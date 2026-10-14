@@ -123,12 +123,43 @@ async def fetch_mastery(client: Client | None) -> dict[str, dict]:
         return {}
 
 
+def bkt_update(
+    p_known: float,
+    is_correct: bool,
+    p_transit: float = 0.15,
+    p_guess: float = 0.20,
+    p_slip: float = 0.10,
+) -> float:
+    """
+    Standard Bayesian Knowledge Tracing (BKT) closed-form update (Corbett & Anderson).
+    p_known: current P(L_t), prior belief the student knows the topic (0.01 - 0.99)
+    is_correct: observed answer outcome (True/False)
+    p_transit: P(T), transition/learning probability per opportunity (0.15)
+    p_guess: P(G), guess probability (0.2 for 4-option MCQ, 0.05 for numerical)
+    p_slip: P(S), careless slip probability (0.10)
+    """
+    p_l = max(0.01, min(0.99, float(p_known)))
+
+    if is_correct:
+        numerator = p_l * (1.0 - p_slip)
+        denominator = numerator + (1.0 - p_l) * p_guess
+    else:
+        numerator = p_l * p_slip
+        denominator = numerator + (1.0 - p_l) * (1.0 - p_slip)
+
+    p_observed = numerator / denominator if denominator > 0 else p_l
+    p_next = p_observed + (1.0 - p_observed) * p_transit
+    return max(0.01, min(0.99, round(p_next, 4)))
+
+
 async def upsert_mastery(
     client: Client | None,
     topic: str,
     is_correct: bool,
     learning_rate: float = 0.3,
     user_id: str | None = None,
+    is_formative_chat: bool = False,
+    question_type: str = "mcq",
 ) -> None:
 
     if client is None or user_id is None:
@@ -141,17 +172,18 @@ async def upsert_mastery(
 
         rows = existing.data or []
 
-        current_score = rows[0]["mastery_score"] if rows else 0.3
-        times_seen = rows[0]["times_seen"] if rows else 0
+        current_score = float(rows[0]["mastery_score"]) if rows else 0.30
+        times_seen = int(rows[0]["times_seen"]) if rows else 0
 
-        target = 1.0 if is_correct else 0.0
+        if is_formative_chat:
+            # Formative chat engagement step: slight reinforcement (0 LLM tokens)
+            new_score = current_score + 0.02 * (1.0 - current_score)
+        else:
+            # Standard BKT update: 0 LLM calls, pure psychometric math
+            p_guess = 0.05 if question_type in ("numerical", "short_answer") else 0.20
+            new_score = bkt_update(current_score, is_correct, p_guess=p_guess)
 
-        new_score = (
-            current_score
-            + learning_rate * (target - current_score)
-        )
-
-        new_score = max(0.0, min(1.0, new_score))
+        new_score = max(0.01, min(0.99, round(new_score, 4)))
 
         client.table("topic_mastery").upsert(
             {

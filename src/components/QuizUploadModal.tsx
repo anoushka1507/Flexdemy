@@ -44,6 +44,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
   const [extractingTopics, setExtractingTopics] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDiagnosticMode, setIsDiagnosticMode] = useState(false);
 
   const toggleQuestionType = (value: string) => {
     setQuestionTypes((prev) => {
@@ -147,6 +148,10 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
     if (extractedConcepts) {
       formData.append('concept_drafts_json', JSON.stringify(extractedConcepts));
       formData.append('selected_topics', selectedTopics.join(','));
+    }
+
+    if (isDiagnosticMode) {
+      formData.append('is_diagnostic', 'true');
     }
 
     const difficultyValue = difficulty.toLowerCase();
@@ -404,16 +409,48 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
             </div>
           )}
 
+          {/* Diagnostic Placement Mode Toggle (Requirement 4.b) */}
+          <div className="p-3.5 rounded-2xl border border-purple-200 bg-purple-50/70 space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-sm text-[#7372A5]">assignment_turned_in</span>
+                <span className="text-xs font-bold text-[#222138]">Diagnostic Placement Mode (Cold-Start)</span>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isDiagnosticMode}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setIsDiagnosticMode(checked);
+                    if (checked) {
+                      setDifficulty('Medium');
+                      setQuestionCount(5);
+                    }
+                  }}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#7372A5]"></div>
+              </label>
+            </div>
+            <p className="text-[11px] text-gray-600 leading-normal">
+              {isDiagnosticMode
+                ? 'Active: Selects 1 representative Medium question per major topic to cleanly calibrate your Bayesian Knowledge Tracing (BKT) baseline mastery vector P(L_0) with 0 LLM grading tokens.'
+                : 'Enable for new students or intake calibration before regular adaptive quizzing.'}
+            </p>
+          </div>
+
           {/* Difficulty and Question Count */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-                Difficulty Level
+                Difficulty Level {isDiagnosticMode && <span className="text-[10px] text-[#7372A5] font-normal">(Locked to Medium for diagnostic)</span>}
               </label>
               <select
                 value={difficulty}
+                disabled={isDiagnosticMode}
                 onChange={(e) => setDifficulty(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5]"
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5] disabled:bg-gray-100 disabled:opacity-70"
               >
                 <option value="Easy">Easy</option>
                 <option value="Medium">Medium</option>
@@ -423,12 +460,13 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-                Question Count
+                Question Count {isDiagnosticMode && <span className="text-[10px] text-[#7372A5] font-normal">(1 per major topic)</span>}
               </label>
               <select
                 value={questionCount}
+                disabled={isDiagnosticMode}
                 onChange={(e) => setQuestionCount(Number(e.target.value))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5]"
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5] disabled:bg-gray-100 disabled:opacity-70"
               >
                 <option value={5}>5 Questions</option>
                 <option value={10}>10 Questions</option>

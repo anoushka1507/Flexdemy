@@ -343,6 +343,18 @@ def choose_weighted_concept(
             detail="No concepts are available.",
         )
 
+    if session.is_diagnostic:
+        # Algorithmic Diagnostic Placement: Select 1 concept per major topic
+        asked_topics = set()
+        for item in session.history:
+            c_match = next((c for c in concepts if c.label == item.concept_label), None)
+            if c_match and c_match.topic:
+                asked_topics.add(c_match.topic)
+        unasked = [c for c in concepts if c.topic not in asked_topics]
+        if unasked:
+            return unasked[0]
+        return min(concepts, key=lambda c: session.concept_states[c.label].times_asked)
+
     weights = []
 
     for concept in concepts:
@@ -739,6 +751,8 @@ async def start_adaptive_quiz(
     # actually saw and picked from).
     concept_drafts_json: str = Form(""),
 
+    is_diagnostic: bool = Form(False),
+
     authorization: str | None = Header(None),
 ):
 
@@ -898,10 +912,15 @@ async def start_adaptive_quiz(
         # Create session.
         # ----------------------------------------------------
 
+        if is_diagnostic:
+            difficulty = "medium"
+            distinct_topics = list(dict.fromkeys(c.topic for c in concepts if c.topic))
+            if distinct_topics:
+                question_count = len(distinct_topics)
+
         session_id = str(
             uuid.uuid4()
         )
-
 
         session = AdaptiveSession(
             session_id=session_id,
@@ -914,6 +933,7 @@ async def start_adaptive_quiz(
             concepts=concepts,
             concept_states=concept_states,
             question_types=requested_types,
+            is_diagnostic=is_diagnostic,
         )
 
 
@@ -1107,11 +1127,13 @@ async def record_answer_and_advance(
     # own errors internally), so it's safe to run concurrently with
     # next-question generation below instead of serially blocking the
     # Gemini call behind a database round-trip first.
+    q_type = session.current_question.question_type if session.current_question else "mcq"
     mastery_task = upsert_mastery(
         sb_client,
         topic,
         was_correct,
         user_id=user_id,
+        question_type=q_type,
     )
 
     # --------------------------------------------------------
@@ -1529,8 +1551,8 @@ async def grounded_chat_api(
                     sb_client,
                     topic,
                     is_correct=True,
-                    learning_rate=0.05,
                     user_id=chat_user_id,
+                    is_formative_chat=True,
                 )
 
     return response.model_dump()
@@ -1570,12 +1592,16 @@ async def generate_flashcards_api(request: FlashcardRequest):
         )
         await save_material(request.session_id, material)
 
+    session = await get_session(request.session_id)
+    concepts = session.concepts if session else None
+
     count = max(1, min(request.count, 15))
 
     flashcards = await generate_flashcards(
         request.topic,
         chunks,
-        material["embeddings"],
+        material.get("embeddings"),
+        concepts=concepts,
         count=count,
     )
 
@@ -1733,10 +1759,28 @@ async def explain_answer_api(
     request: ExplainAnswerRequest,
 ):
 
-    from AI_Layer.ai_core import generate_explanation
     from AI_Layer.models import QuestionDraft
 
     question = QuestionDraft.model_validate(request.question)
+
+    misconception = None
+    if 0 <= request.selected_option_index < len(question.options):
+        misconception = question.options[request.selected_option_index].misconception_tag
+
+    # 1. Fast deterministic path: use question's pre-bundled explanation & misconception (0 LLM tokens)
+    if question.explanation and question.explanation.strip():
+        text = question.explanation.strip()
+        if misconception:
+            text = f"[Misconception: {misconception}] {text}"
+        return {
+            "explanation": text,
+            "source_locator": question.source_locator,
+            "topic": question.topic,
+            "misconception_tag": misconception,
+        }
+
+    # 2. Fallback to LLM only if explanation is absent
+    from AI_Layer.ai_core import generate_explanation
 
     explanation = await generate_explanation(
         question,
@@ -1747,6 +1791,7 @@ async def explain_answer_api(
         "explanation": explanation,
         "source_locator": question.source_locator,
         "topic": question.topic,
+        "misconception_tag": misconception,
     }
 
 
@@ -1759,14 +1804,127 @@ async def quiz_summary_api(
     request: QuizSummaryRequest,
 ):
 
-    from AI_Layer.ai_core import generate_quiz_summary
     from AI_Layer.models import QuizReportData
 
     report_data = QuizReportData.model_validate(request.report_data)
 
-    summary = await generate_quiz_summary(report_data)
+    # Deterministic pedagogical synthesis (0 LLM calls, 0 latency, reliable under quota exhaustion)
+    concepts = report_data.concepts
+    total = len(concepts)
+    avg_acc = sum(c.accuracy for c in concepts) / total if total > 0 else 0.0
+    weakest = report_data.weakest_concept_labels
+    strongest = [c.concept_label for c in concepts if c.accuracy >= 0.75]
+
+    parts = []
+    if avg_acc >= 0.80:
+        parts.append(f"Exceptional performance! You demonstrated mastery ({avg_acc:.0%}) across the assessed topics.")
+    elif avg_acc >= 0.50:
+        parts.append(f"Solid performance! You achieved {avg_acc:.0%} accuracy, showing reliable working comprehension with specific growth areas.")
+    else:
+        parts.append(f"Good foundational effort ({avg_acc:.0%} accuracy). Adaptive spaced practice will help anchor concepts that need reinforcement.")
+
+    if strongest:
+        parts.append(f"Strongest topics: {', '.join(strongest[:2])}.")
+    if weakest:
+        parts.append(f"Priority review topics: {', '.join(weakest[:3])}. We recommend reviewing the cited excerpts or using targeted flashcards.")
+
+    summary = " ".join(parts)
 
     return {"summary": summary}
+
+
+# ============================================================
+# STUDY SCHEDULE GENERATOR (Track D, Requirement 6c)
+# Ebbinghaus Forgetting Curve & Spaced Repetition (0 LLM Tokens)
+# ============================================================
+
+class StudyScheduleRequest(BaseModel):
+    days_until_exam: int = 7
+    daily_minutes: int = 45
+    session_id: str | None = None
+
+
+@app.post("/study-schedule")
+async def study_schedule_api(
+    request: StudyScheduleRequest,
+    authorization: str | None = Header(None),
+):
+    import math
+
+    sb_client = get_user_client(authorization)
+    mastery_dict = await fetch_mastery(sb_client) if sb_client else {}
+
+    topics = list(mastery_dict.keys())
+    if request.session_id:
+        session = await get_session(request.session_id)
+        if session:
+            for c in session.concepts:
+                if c.topic not in topics:
+                    topics.append(c.topic)
+
+    if not topics:
+        topics = ["Core Concepts", "Foundational Principles", "Problem Solving"]
+
+    days = max(1, min(request.days_until_exam, 30))
+    minutes = max(15, min(request.daily_minutes, 180))
+
+    # Calculate projected Ebbinghaus retention: R(t) = exp(-t / S)
+    # S (Stability) scales with BKT mastery P(L): S = 1.0 + 9.0 * p_l
+    topic_assessments = []
+    for t in topics:
+        p_l = float(mastery_dict.get(t, {}).get("mastery_score", 0.35))
+        stability = 1.0 + 9.0 * p_l
+        retention_at_exam = math.exp(-days / stability)
+        topic_assessments.append({
+            "topic": t,
+            "mastery_p": round(p_l, 3),
+            "projected_retention": round(retention_at_exam, 3),
+            "urgency": round(1.0 - retention_at_exam, 3),
+        })
+
+    topic_assessments.sort(key=lambda x: x["urgency"], reverse=True)
+
+    daily_plan = []
+    for day in range(1, days + 1):
+        day_topic = topic_assessments[(day - 1) % len(topic_assessments)]["topic"]
+        secondary_topic = topic_assessments[day % len(topic_assessments)]["topic"]
+
+        if day == days:
+            stage = "Final Mock Exam & High-Yield Review"
+            tasks = [
+                {"type": "mock_exam", "title": "Full Comprehensive Mock Exam across all topics", "minutes": int(minutes * 0.6)},
+                {"type": "flashcards", "title": "Rapid flashcard review on weak spots", "minutes": int(minutes * 0.4)},
+            ]
+        elif day % 2 == 1:
+            stage = f"Deep Dive: {day_topic}"
+            tasks = [
+                {"type": "review", "title": f"Review cited lecture excerpts for {day_topic}", "minutes": int(minutes * 0.5)},
+                {"type": "adaptive_quiz", "title": f"Adaptive practice quiz on {day_topic}", "minutes": int(minutes * 0.5)},
+            ]
+        else:
+            stage = f"Spaced Reinforcement: {secondary_topic}"
+            tasks = [
+                {"type": "flashcards", "title": f"Active recall flashcards for {secondary_topic}", "minutes": int(minutes * 0.4)},
+                {"type": "tutor_chat", "title": f"Socratic grounded tutor chat on misconceptions in {day_topic}", "minutes": int(minutes * 0.6)},
+            ]
+
+        daily_plan.append({
+            "day": day,
+            "focus_topic": day_topic,
+            "stage": stage,
+            "daily_minutes": minutes,
+            "tasks": tasks,
+        })
+
+    avg_retention = sum(t["projected_retention"] for t in topic_assessments) / len(topic_assessments)
+
+    return {
+        "days_until_exam": days,
+        "daily_minutes": minutes,
+        "projected_exam_retention": round(avg_retention, 2),
+        "topics_analysis": topic_assessments,
+        "schedule": daily_plan,
+    }
 
 # ============================================================
 # LEGACY BATCH GENERATION
