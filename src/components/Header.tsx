@@ -23,17 +23,32 @@ export const Header: React.FC<HeaderProps> = ({
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getUser().then(({ data }) => {
+    const applySession = (
+      session: { user?: { email?: string | null } } | null
+    ) => {
       if (!mounted) return;
-      if (data.user?.email) {
-        setUserEmail(data.user.email);
+      if (session?.user?.email) {
+        setUserEmail(session.user.email);
+        setIsGuest(false);
       } else {
+        setUserEmail(null);
         setIsGuest(true);
       }
+    };
+
+    supabase.auth.getSession().then(({ data }) => {
+      applySession(data.session);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      applySession(session);
     });
 
     return () => {
       mounted = false;
+      subscription.unsubscribe();
     };
   }, []);
 
