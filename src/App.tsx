@@ -280,6 +280,7 @@ export default function App() {
           setCurrentView={setCurrentView}
           dyslexiaMode={dyslexiaMode}
           setDyslexiaMode={setDyslexiaMode}
+          onOpenUploadModal={() => setIsUploadModalOpen(true)}
         />
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
