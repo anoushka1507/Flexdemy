@@ -68,6 +68,13 @@ except ValueError as e:
 
 MODEL_TEXT = "gemini-3.1-flash-lite"
 
+# Used only when the primary model itself is down (503 UNAVAILABLE /
+# "experiencing high demand" — a real upstream Gemini outage, not a
+# quota issue). A different model doesn't share the free-tier quota
+# that 429s come from, so this is a genuine way out of an outage
+# instead of just retrying into the same wall.
+MODEL_TEXT_FALLBACK = "gemini-2.5-flash"
+
 MAX_QUIZ_CONCEPTS = 8
 
 
@@ -121,6 +128,30 @@ def with_retry(
         return wrapper
 
     return decorator
+
+
+async def generate_content_resilient(**kwargs):
+    """
+    Call the primary model; if it's actually down (503 UNAVAILABLE),
+    retry immediately against a fallback model instead of letting the
+    whole request fail. Anything else (including 429 quota errors,
+    which a fallback model wouldn't fix) is just raised as-is.
+    """
+
+    try:
+        return await client.aio.models.generate_content(
+            model=MODEL_TEXT, **kwargs
+        )
+
+    except Exception as e:
+
+        if "503" in str(e) or "UNAVAILABLE" in str(e):
+
+            return await client.aio.models.generate_content(
+                model=MODEL_TEXT_FALLBACK, **kwargs
+            )
+
+        raise
 
 
 # ============================================================
@@ -662,9 +693,7 @@ async def extract_concepts(
         f"Source material:\n{source_text}"
     )
 
-    response = await client.aio.models.generate_content(
-
-        model=MODEL_TEXT,
+    response = await generate_content_resilient(
 
         contents=prompt,
 
@@ -896,9 +925,7 @@ General rules:
 6. Return only the structured JSON response.
 """
 
-    response = await client.aio.models.generate_content(
-
-        model=MODEL_TEXT,
+    response = await generate_content_resilient(
 
         contents=prompt,
 
