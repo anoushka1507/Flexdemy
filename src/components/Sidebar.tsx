@@ -9,6 +9,7 @@ interface SidebarProps {
   setDyslexiaMode: (enabled: boolean) => void;
   onOpenUploadModal: () => void;
   onOpenCourseMap: () => void;
+  onOpenLatestResults: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -18,6 +19,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setDyslexiaMode,
   onOpenUploadModal,
   onOpenCourseMap,
+  onOpenLatestResults,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -73,6 +75,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       onOpenUploadModal();
     } else if (id === 'course-map') {
       onOpenCourseMap();
+    } else if (id === 'quiz-results') {
+      onOpenLatestResults();
     } else {
       setCurrentView(id as ViewMode);
     }

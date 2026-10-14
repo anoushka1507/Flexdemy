@@ -35,7 +35,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [dyslexiaMode, setDyslexiaMode] = useState<boolean>(false);
   const [userProfile, setUserProfile] = useState(INITIAL_USER_PROFILE);
-  const [quizzesList, setQuizzesList] = useState<Quiz[]>(SAMPLE_QUIZZES);
+  const [quizzesList, setQuizzesList] = useState<Quiz[]>([]);
   
   const [recentHistory, setRecentHistory] = useState<{
     id: string;
@@ -50,6 +50,9 @@ export default function App() {
   const [activeQuiz, setActiveQuiz] = useState<Quiz>(SAMPLE_QUIZZES[0]);
   const [adaptiveSessionId, setAdaptiveSessionId] = useState<string | undefined>(undefined);
   const [quizResult, setQuizResult] = useState<QuizResult | null>(null);
+  const [resultsInitialTab, setResultsInitialTab] = useState<
+    'review' | 'insights'
+  >('review');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [isCourseMapOpen, setIsCourseMapOpen] = useState<boolean>(false);
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
@@ -254,6 +257,8 @@ export default function App() {
       setActiveQuiz(completedQuiz);
     }
 
+    setResultsInitialTab('review');
+
     // Best-effort persistence so this result survives a refresh —
     // fire-and-forget, doesn't block the UI update below.
     (async () => {
@@ -281,6 +286,10 @@ export default function App() {
             score_percentage: result.scorePercentage,
             total_questions: result.totalQuestions,
             correct_answers_count: result.correctAnswersCount,
+            session_id: adaptiveSessionId || null,
+            topic_breakdown: result.topicBreakdown?.length
+              ? result.topicBreakdown
+              : null,
           }),
         });
 
@@ -337,6 +346,52 @@ export default function App() {
     });
 
     setCurrentView('quiz-results');
+  };
+
+  // Clicking "Latest Results" from the sidebar used to just navigate
+  // to the quiz-results view, which only ever worked if quizResult
+  // was still sitting in memory from the quiz you just finished —
+  // revisiting it later (after a refresh, or any other quiz) showed
+  // nothing. Fetch the most recent persisted entry and reconstruct
+  // enough of a QuizResult to make Insights/flashcards work on it.
+  const handleOpenLatestResults = async () => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) return;
+
+    try {
+      const response = await fetch('/api/quiz-history', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!response.ok) return;
+
+      const data = await response.json();
+      const rows: any[] = data.history || [];
+      if (rows.length === 0) return;
+
+      const latest = rows[0];
+
+      const reconstructed: QuizResult = {
+        quizId: latest.quiz_id,
+        quizTitle: latest.quiz_title,
+        scorePercentage: latest.score_percentage,
+        totalQuestions: latest.total_questions,
+        correctAnswersCount: latest.correct_answers_count,
+        incorrectAnswersCount:
+          latest.total_questions - latest.correct_answers_count,
+        timeSpentSeconds: 0,
+        dateCompleted: latest.completed_at,
+        userAnswers: {},
+        topicBreakdown: latest.topic_breakdown || [],
+      };
+
+      setQuizResult(reconstructed);
+      setAdaptiveSessionId(latest.session_id || undefined);
+      setResultsInitialTab('insights');
+      setCurrentView('quiz-results');
+    } catch {
+      // Best-effort — nothing to show if this fails.
+    }
   };
 
   // ==========================================================
@@ -408,6 +463,7 @@ export default function App() {
         onRetakeQuiz={() => handleStartQuiz(activeQuiz)}
         onStartAnotherQuiz={() => setCurrentView('landing')}
         sessionId={adaptiveSessionId}
+        initialTab={resultsInitialTab}
       />
     );
   }
@@ -426,6 +482,7 @@ export default function App() {
           setDyslexiaMode={setDyslexiaMode}
           onOpenUploadModal={() => setIsUploadModalOpen(true)}
           onOpenCourseMap={() => setIsCourseMapOpen(true)}
+          onOpenLatestResults={handleOpenLatestResults}
         />
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
@@ -457,6 +514,24 @@ export default function App() {
 
               </div>
 
+
+              {quizzesList.length === 0 && (
+                <div className="bg-white rounded-2xl border border-dashed border-[#d8d7e8] p-10 text-center">
+                  <p className="text-sm font-bold text-[#222138] mb-1">
+                    No quizzes yet
+                  </p>
+                  <p className="text-xs text-gray-500 mb-4">
+                    Quizzes you generate from your own material will show up
+                    here.
+                  </p>
+                  <button
+                    onClick={() => setIsUploadModalOpen(true)}
+                    className="px-4 py-2 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs"
+                  >
+                    Upload Material
+                  </button>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
 
