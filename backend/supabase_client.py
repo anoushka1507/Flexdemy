@@ -363,6 +363,8 @@ async def record_quiz_result(
     score_percentage: float,
     total_questions: int,
     correct_answers_count: int,
+    session_id: str | None = None,
+    topic_breakdown: list | None = None,
 ) -> None:
 
     if client is None or user_id is None:
@@ -379,6 +381,8 @@ async def record_quiz_result(
                 "score_percentage": score_percentage,
                 "total_questions": total_questions,
                 "correct_answers_count": correct_answers_count,
+                "session_id": session_id,
+                "topic_breakdown": topic_breakdown,
             }
         ).execute()
 

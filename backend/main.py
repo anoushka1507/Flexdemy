@@ -1642,6 +1642,13 @@ async def mastery_api(
 # QUIZ HISTORY (dashboard stats survive a page refresh)
 # ============================================================
 
+class TopicBreakdownEntry(BaseModel):
+    topicName: str
+    score: int
+    total: int
+    masteryPercentage: int
+
+
 class QuizHistoryEntry(BaseModel):
     quiz_id: str
     quiz_title: str
@@ -1650,6 +1657,8 @@ class QuizHistoryEntry(BaseModel):
     score_percentage: float
     total_questions: int
     correct_answers_count: int
+    session_id: str | None = None
+    topic_breakdown: list[TopicBreakdownEntry] | None = None
 
 
 @app.post("/record-quiz-result")
@@ -1671,6 +1680,12 @@ async def record_quiz_result_api(
         request.score_percentage,
         request.total_questions,
         request.correct_answers_count,
+        session_id=request.session_id,
+        topic_breakdown=(
+            [t.model_dump() for t in request.topic_breakdown]
+            if request.topic_breakdown
+            else None
+        ),
     )
 
     return {"recorded": sb_client is not None and user_id is not None}

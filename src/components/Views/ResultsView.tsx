@@ -22,6 +22,7 @@ interface ResultsViewProps {
   onRetakeQuiz: () => void;
   onStartAnotherQuiz: () => void;
   sessionId?: string;
+  initialTab?: 'review' | 'insights';
 }
 
 export const ResultsView: React.FC<ResultsViewProps> = ({
@@ -33,8 +34,11 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
   onRetakeQuiz,
   onStartAnotherQuiz,
   sessionId,
+  initialTab,
 }) => {
-  const [activeTab, setActiveTab] = useState<'review' | 'insights'>('review');
+  const [activeTab, setActiveTab] = useState<'review' | 'insights'>(
+    initialTab || 'review'
+  );
   const [flashcardsByTopic, setFlashcardsByTopic] = useState<
     Record<string, Flashcard[]>
   >({});
