@@ -1344,7 +1344,7 @@ async def analyze_past_paper(
 # EMBEDDINGS / RETRIEVAL
 # ============================================================
 
-EMBEDDING_MODEL = "gemini-embedding-001"
+EMBEDDING_MODEL = "text-embedding-004"
 
 GROUNDING_THRESHOLD = 0.55
 
@@ -1393,11 +1393,22 @@ def _lexical_similarity(query: str, text: str) -> float:
     q_words = set(w for w in re.findall(r"\w+", query.lower()) if len(w) > 2)
     if not q_words:
         return 0.0
-    t_words = set(re.findall(r"\w+", text.lower()))
+    t_words = set(w for w in re.findall(r"\w+", text.lower()) if len(w) > 2)
     if not t_words:
         return 0.0
-    overlap = len(q_words & t_words)
-    return overlap / len(q_words)
+
+    exact_matches = q_words & t_words
+    stemmed_matches = set()
+    for qw in q_words - exact_matches:
+        qw_stem = qw.rstrip("s").rstrip("ing").rstrip("ed")
+        for tw in t_words:
+            tw_stem = tw.rstrip("s").rstrip("ing").rstrip("ed")
+            if (len(qw_stem) >= 3 and qw_stem == tw_stem) or (len(qw) >= 4 and (qw in tw or tw in qw)):
+                stemmed_matches.add(qw)
+                break
+
+    total_matches = len(exact_matches) + len(stemmed_matches)
+    return total_matches / len(q_words)
 
 
 async def retrieve_relevant_chunks(
@@ -1531,10 +1542,11 @@ async def generate_flashcards(
 @with_retry(retries=2)
 async def answer_grounded_question(
     chunks: list[Chunk],
-    chunk_embeddings: list[list[float]],
+    chunk_embeddings: list[list[float]] | None,
     conversation_history: list[ChatTurn],
     student_message: str,
     language: str = "english",
+    style: str = "concise",
 ) -> GroundedChatResponse:
 
     if client is None:
@@ -1554,14 +1566,25 @@ async def answer_grounded_question(
                 citations=[],
             )
         best_chunk, best_score = top_matches[0]
-        return GroundedChatResponse(
-            answer=(
+        if language == "hindi":
+            offline_msg = (
+                f"[Offline Mode — Direct Excerpt Retrieval]\n"
+                f"Generative AI synthesis is unavailable (GEMINI_API_KEY not configured). "
+                f"Aapke uploaded notes se relevant passage ({best_chunk.locator}):\n\n"
+                f'"{best_chunk.text[:300]}..."\n\n'
+                f"[Source: {best_chunk.locator}]"
+            )
+        else:
+            offline_msg = (
                 f"[Offline Mode — Direct Excerpt Retrieval]\n"
                 f"Generative AI synthesis is unavailable (GEMINI_API_KEY not configured). "
                 f"Relevant passage from your notes ({best_chunk.locator}):\n\n"
                 f'"{best_chunk.text[:300]}..."\n\n'
                 f"[Source: {best_chunk.locator}]"
-            ),
+            )
+
+        return GroundedChatResponse(
+            answer=offline_msg,
             is_grounded=True,
             citations=[
                 Citation(
@@ -1604,20 +1627,30 @@ async def answer_grounded_question(
     )
 
     language_instruction = (
-        "Explain in Hinglish (a natural mix of Hindi and English, "
-        "written in Roman/Latin script, the way Indian students "
-        "actually speak) — even though the source material itself "
-        "is in English. Keep technical terms in English."
+        "Explain in Hinglish (a natural, conversational blend of Hindi and English, "
+        "written in Latin/Roman script, standard for Indian STEM students) — "
+        "even though the source material itself is in English. Keep technical terms, "
+        "code, formulas, and source locator tags in English."
         if language == "hindi"
-        else "Answer in English."
+        else "Answer in clear, educational English."
     )
 
+    style_instruction = {
+        "concise": "Keep the answer concise, direct, and to the point (2-3 short paragraphs maximum). Avoid fluff.",
+        "step-by-step": "Break down the explanation into clear, numbered step-by-step points so the learner can follow incrementally.",
+        "example-first": "Start immediately with a clear, concrete real-world example or scenario before explaining the underlying principles.",
+    }.get(style, "Keep the answer concise and clear.")
+
     prompt = (
-        "You are a study tutor that must answer ONLY using the "
+        "You are an encouraging study tutor that must answer ONLY using the "
         "source excerpts below. Cite the exact [Source: ...] tag(s) "
         "you used inline in your answer. If the excerpts don't "
-        "actually answer the question, say so instead of guessing.\n\n"
-        f"{language_instruction}\n\n"
+        "actually answer the question, say so clearly instead of guessing.\n\n"
+        f"Language Requirement: {language_instruction}\n"
+        f"Style Requirement: {style_instruction}\n\n"
+        "CRITICAL REQUIREMENT: Always preserve exact source locators in square brackets "
+        "(e.g., [Source: Page 2] or [Source: 01:23]) exactly as they appear in the source excerpts. "
+        "Do not translate, alter, or omit locator strings.\n\n"
         f"Source excerpts:\n{context_blocks}\n\n"
         f"Conversation so far:\n{history_text}\n\n"
         f"Student question:\n{student_message}"

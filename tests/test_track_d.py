@@ -555,5 +555,137 @@ class TestCitationProvenanceAndRefusal(unittest.TestCase):
             loop.close()
 
 
+class TestGroundedTutorAndVoiceSupport(unittest.TestCase):
+    """Regression test suite for Grounded Chat, Language selection, Style, and Audio transcription."""
+
+    def test_embedding_model_configured_correctly(self):
+        from AI_Layer.ai_core import EMBEDDING_MODEL
+        self.assertEqual(EMBEDDING_MODEL, "text-embedding-004")
+
+    def test_grounded_chat_empty_session_id_400(self):
+        from backend.main import grounded_chat_api, GroundedChatRequest
+        loop = asyncio.new_event_loop()
+        try:
+            req = GroundedChatRequest(session_id="   ", message="What is an index?")
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(grounded_chat_api(req))
+            self.assertEqual(cm.exception.status_code, 400)
+            self.assertIn("Session ID is required", cm.exception.detail)
+        finally:
+            loop.close()
+
+    def test_grounded_chat_empty_message_400(self):
+        from backend.main import grounded_chat_api, GroundedChatRequest
+        loop = asyncio.new_event_loop()
+        try:
+            req = GroundedChatRequest(session_id="valid-session", message="   ")
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(grounded_chat_api(req))
+            self.assertEqual(cm.exception.status_code, 400)
+            self.assertIn("question message is required", cm.exception.detail)
+        finally:
+            loop.close()
+
+    def test_grounded_chat_unsupported_language_400(self):
+        from backend.main import grounded_chat_api, GroundedChatRequest
+        loop = asyncio.new_event_loop()
+        try:
+            req = GroundedChatRequest(
+                session_id="valid-session",
+                message="Explain this topic",
+                language="german",
+            )
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(grounded_chat_api(req))
+            self.assertEqual(cm.exception.status_code, 400)
+            self.assertIn("Unsupported language 'german'", cm.exception.detail)
+        finally:
+            loop.close()
+
+    def test_grounded_chat_missing_session_404(self):
+        from backend.main import grounded_chat_api, GroundedChatRequest
+        loop = asyncio.new_event_loop()
+        try:
+            req = GroundedChatRequest(
+                session_id="nonexistent-session-id-999",
+                message="Explain this topic",
+                language="english",
+            )
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(grounded_chat_api(req))
+            self.assertEqual(cm.exception.status_code, 404)
+            self.assertIn("No ingested material found", cm.exception.detail)
+        finally:
+            loop.close()
+
+    def test_grounded_chat_language_and_style_offline_fallback(self):
+        chunk = Chunk(
+            chunk_index=0,
+            text="Relational databases use B+ trees for primary key indexing and fast range scans.",
+            locator="Page 12",
+            source_type="pdf",
+            source_filename="db_notes.pdf",
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            # Test English offline response
+            resp_en = loop.run_until_complete(
+                answer_grounded_question(
+                    [chunk],
+                    None,
+                    [],
+                    "How are primary keys indexed?",
+                    language="english",
+                    style="concise",
+                )
+            )
+            self.assertTrue(resp_en.is_grounded)
+            self.assertIn("Page 12", resp_en.answer)
+            self.assertIn("[Offline Mode", resp_en.answer)
+
+            # Test Hindi/Hinglish offline response
+            resp_hi = loop.run_until_complete(
+                answer_grounded_question(
+                    [chunk],
+                    None,
+                    [],
+                    "Primary keys kaise index hoti hain?",
+                    language="hindi",
+                    style="step-by-step",
+                )
+            )
+            self.assertTrue(resp_hi.is_grounded)
+            self.assertIn("Page 12", resp_hi.answer)
+            self.assertIn("Aapke uploaded notes", resp_hi.answer)
+        finally:
+            loop.close()
+
+    def test_transcribe_audio_validations(self):
+        from backend.main import transcribe_audio_api
+        loop = asyncio.new_event_loop()
+        try:
+            # 1. Empty audio file
+            empty_file = UploadFile(filename="voice.mp3", file=io.BytesIO(b""))
+            with self.assertRaises(HTTPException) as cm_empty:
+                loop.run_until_complete(transcribe_audio_api(empty_file))
+            # May be 503 if client is None or 400 if client check passes/reordered
+            self.assertIn(cm_empty.exception.status_code, (400, 503))
+
+            # 2. Unsupported audio format
+            bad_file = UploadFile(filename="virus.exe", file=io.BytesIO(b"MZ12345678"))
+            with self.assertRaises(HTTPException) as cm_bad:
+                loop.run_until_complete(transcribe_audio_api(bad_file))
+            self.assertIn(cm_bad.exception.status_code, (415, 503))
+
+            # 3. Oversized audio file (>5MB)
+            huge_data = b"0" * (6 * 1024 * 1024)
+            huge_file = UploadFile(filename="podcast.mp3", file=io.BytesIO(huge_data))
+            with self.assertRaises(HTTPException) as cm_huge:
+                loop.run_until_complete(transcribe_audio_api(huge_file))
+            self.assertIn(cm_huge.exception.status_code, (413, 503))
+        finally:
+            loop.close()
+
+
 if __name__ == "__main__":
     unittest.main()

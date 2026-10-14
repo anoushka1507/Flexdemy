@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import os
 import random
+import logging
 import sys
 import uuid
 
@@ -21,6 +22,8 @@ from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from typing import Literal
+
+logger = logging.getLogger("flexdemy.api")
 
 
 load_dotenv()
@@ -1654,6 +1657,10 @@ async def answer_adaptive_question_open(
 # GROUNDED TUTOR CHAT (source-cited, with refusal)
 # ============================================================
 
+SUPPORTED_LANGUAGES = {"english", "hindi"}
+SUPPORTED_STYLES = {"concise", "step-by-step", "example-first"}
+
+
 class GroundedChatRequest(BaseModel):
     session_id: str
     message: str
@@ -1661,6 +1668,7 @@ class GroundedChatRequest(BaseModel):
     # "english" (default) or "hindi" (Hinglish explanation of the
     # same, English-language source material).
     language: str = "english"
+    style: Literal["concise", "step-by-step", "example-first"] = "concise"
 
 
 @app.post("/grounded-chat")
@@ -1668,6 +1676,33 @@ async def grounded_chat_api(
     request: GroundedChatRequest,
     authorization: str | None = Header(None),
 ):
+    correlation_id = str(uuid.uuid4())[:8]
+
+    # 1. Input Validation
+    clean_session_id = (request.session_id or "").strip()
+    if not clean_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Session ID is required and cannot be empty.",
+        )
+
+    clean_message = (request.message or "").strip()
+    if not clean_message:
+        raise HTTPException(
+            status_code=400,
+            detail="Student question message is required and cannot be empty.",
+        )
+
+    clean_lang = (request.language or "english").strip().lower()
+    if clean_lang not in SUPPORTED_LANGUAGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported language '{request.language}'. Supported languages are: {', '.join(sorted(SUPPORTED_LANGUAGES))}.",
+        )
+
+    clean_style = (request.style or "concise").strip().lower()
+    if clean_style not in SUPPORTED_STYLES:
+        clean_style = "concise"
 
     chat_user_id = get_user_id(authorization)
     sb_client = get_user_client(authorization)
@@ -1678,81 +1713,208 @@ async def grounded_chat_api(
         embed_texts,
     )
 
+    # 2. Material Retrieval
     material = await get_material(
-        request.session_id,
+        clean_session_id,
         user_id=chat_user_id,
         auth_client=sb_client,
     )
 
     if material is None:
+        logger.warning(
+            "[%s] Material not found for session %s (user: %s)",
+            correlation_id, clean_session_id, chat_user_id,
+        )
         raise HTTPException(
             status_code=404,
-            detail="No ingested material found for this session.",
+            detail="No ingested material found for this quiz session. The session may have expired or been started without persistent storage.",
         )
 
-    chunks = material["chunks"]
-
-    if material["embeddings"] is None:
-        material["embeddings"] = await embed_texts(
-            [chunk.text for chunk in chunks]
-        )
-        await save_material(
-            request.session_id,
-            material,
-            user_id=chat_user_id,
-            auth_client=sb_client,
+    chunks = material.get("chunks", [])
+    if not chunks:
+        raise HTTPException(
+            status_code=404,
+            detail="The material for this quiz session contains no extractable text chunks to answer from.",
         )
 
-    response = await answer_grounded_question(
-        chunks,
-        material["embeddings"],
-        request.history,
-        request.message,
-        language=request.language,
-    )
+    # 3. Embedding retrieval with safe fallback to lexical matching
+    if material.get("embeddings") is None:
+        try:
+            material["embeddings"] = await embed_texts(
+                [chunk.text for chunk in chunks]
+            )
+            await save_material(
+                clean_session_id,
+                material,
+                user_id=chat_user_id,
+                auth_client=sb_client,
+            )
+        except Exception as emb_err:
+            logger.warning(
+                "[%s] Embedding generation unavailable or failed: %s; falling back to lexical matching.",
+                correlation_id, emb_err,
+            )
+            material["embeddings"] = None
 
-    # --------------------------------------------------------
-    # Weak-signal mastery nudge: a grounded (non-refused) answer
-    # is evidence the student is engaging with a topic, but it is
-    # NOT a graded answer — so it moves the score by a much smaller
-    # step than a quiz answer does (best-effort, never blocks the
-    # chat response).
-    # --------------------------------------------------------
-
-    if response.is_grounded and response.citations:
-
-        session = await get_session(
-            request.session_id,
-            user_id=chat_user_id,
-            auth_client=sb_client,
+    # 4. Grounded question answering with safe error mapping
+    try:
+        response = await answer_grounded_question(
+            chunks,
+            material.get("embeddings"),
+            request.history,
+            clean_message,
+            language=clean_lang,
+            style=clean_style,
         )
-
-        if session is not None:
-
-            cited_locators = {
-                c.locator for c in response.citations
-            }
-
-            topic = next(
-                (
-                    concept.topic
-                    for concept in session.concepts
-                    if cited_locators & set(concept.locators)
-                ),
-                None,
+    except Exception as e:
+        err_msg = str(e).lower()
+        logger.error(
+            "[%s] Grounded chat generation failed: %s",
+            correlation_id, e,
+        )
+        if "429" in err_msg or "quota" in err_msg or "resource_exhausted" in err_msg:
+            raise HTTPException(
+                status_code=429,
+                detail="The AI tutor is currently experiencing high demand or rate limits. Please wait a few seconds and click Retry.",
+            )
+        elif "client is not initialized" in err_msg or "api_key" in err_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="AI tutor generation is temporarily unavailable because GEMINI_API_KEY is not configured.",
+            )
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"An error occurred while generating the tutor answer (ref: {correlation_id}). Please retry.",
             )
 
-            if topic:
+    # 5. Weak-signal mastery nudge (non-blocking)
+    if response.is_grounded and response.citations:
+        try:
+            session = await get_session(
+                clean_session_id,
+                user_id=chat_user_id,
+                auth_client=sb_client,
+            )
 
-                await upsert_mastery(
-                    sb_client,
-                    topic,
-                    is_correct=True,
-                    user_id=chat_user_id,
-                    is_formative_chat=True,
+            if session is not None and getattr(session, "concepts", None):
+                cited_locators = {
+                    c.locator for c in response.citations
+                }
+
+                topic = next(
+                    (
+                        concept.topic
+                        for concept in session.concepts
+                        if cited_locators & set(concept.locators)
+                    ),
+                    None,
                 )
 
+                if topic and sb_client:
+                    await upsert_mastery(
+                        sb_client,
+                        topic,
+                        is_correct=True,
+                        user_id=chat_user_id,
+                        is_formative_chat=True,
+                    )
+        except Exception as mastery_err:
+            logger.warning(
+                "[%s] Non-critical mastery update skipped: %s",
+                correlation_id, mastery_err,
+            )
+
     return response.model_dump()
+
+
+# ============================================================
+# AUDIO TRANSCRIPTION (Voice Input, Track D)
+# ============================================================
+
+@app.post("/transcribe-audio")
+async def transcribe_audio_api(
+    file: UploadFile = File(...),
+    language: str = Form("english"),
+    authorization: str | None = Header(None),
+):
+    correlation_id = str(uuid.uuid4())[:8]
+    user_id = get_user_id(authorization)
+    check_ai_rate_limit(user_id or "client")
+
+    from AI_Layer.ai_core import client, MODEL_TEXT
+
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Audio transcription is unavailable because GEMINI_API_KEY is not configured.",
+        )
+
+    filename = (file.filename or "recording.webm").lower()
+    SUPPORTED_AUDIO_EXTS = (".mp3", ".wav", ".m4a", ".ogg", ".webm", ".aac")
+    is_valid_ext = any(filename.endswith(ext) for ext in SUPPORTED_AUDIO_EXTS)
+    is_valid_mime = bool(
+        file.content_type
+        and (
+            file.content_type.startswith("audio/")
+            or file.content_type == "video/webm"
+        )
+    )
+
+    if not is_valid_ext and not is_valid_mime:
+        raise HTTPException(
+            status_code=415,
+            detail="Unsupported audio format. Flexdemy supports MP3, WAV, M4A, OGG, and WebM audio files.",
+        )
+
+    audio_bytes = await file.read()
+    if not audio_bytes or len(audio_bytes) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded audio file is empty (0 bytes).",
+        )
+
+    MAX_AUDIO_BYTES = 5 * 1024 * 1024  # 5MB limit
+    if len(audio_bytes) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="Audio file exceeds the maximum 5MB size limit for transcription.",
+        )
+
+    mime_type = file.content_type or "audio/mp3"
+    if "octet-stream" in mime_type:
+        if filename.endswith(".wav"):
+            mime_type = "audio/wav"
+        elif filename.endswith(".m4a"):
+            mime_type = "audio/m4a"
+        elif filename.endswith(".ogg"):
+            mime_type = "audio/ogg"
+        elif filename.endswith(".webm"):
+            mime_type = "audio/webm"
+        else:
+            mime_type = "audio/mp3"
+
+    try:
+        from google import genai
+        part = genai.types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+        lang_note = "in Hindi / Hinglish" if language == "hindi" else "in English"
+        prompt = (
+            f"Transcribe this spoken audio recording verbatim {lang_note}. "
+            "Output ONLY the transcribed speech as plain text. "
+            "Do not add timestamps, commentary, or conversational remarks."
+        )
+        response = await client.aio.models.generate_content(
+            model=MODEL_TEXT,
+            contents=[part, prompt],
+        )
+        transcript = (response.text or "").strip()
+        return {"transcript": transcript, "language": language}
+    except Exception as e:
+        logger.error("[%s] Audio transcription error: %s", correlation_id, e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Audio transcription failed ({correlation_id}). Please ensure clear audio and retry.",
+        )
 
 
 # ============================================================

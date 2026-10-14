@@ -61,7 +61,7 @@ def get_user_client(authorization_header: str | None) -> Client | None:
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return None
 
-    if not authorization_header or not authorization_header.startswith(
+    if not isinstance(authorization_header, str) or not authorization_header.startswith(
         "Bearer "
     ):
         return None
@@ -85,7 +85,7 @@ def get_user_id(authorization_header: str | None) -> str | None:
     Extract the user id (JWT 'sub' claim) from the session token.
     Validates expiration claim ('exp') so expired tokens are not trusted.
     """
-    if not authorization_header or not authorization_header.startswith(
+    if not isinstance(authorization_header, str) or not authorization_header.startswith(
         "Bearer "
     ):
         return None

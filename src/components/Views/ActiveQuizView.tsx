@@ -1045,6 +1045,8 @@ export const ActiveQuizView: React.FC<
         isOpen={isTutorChatOpen}
         onClose={() => setIsTutorChatOpen(false)}
         sessionId={adaptiveSessionId}
+        materialTitle={quiz.title}
+        currentTopic={questions[currentQuestionIndex]?.topic || questions[currentQuestionIndex]?.concept || quiz.topic}
       />
 
 
