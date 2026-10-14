@@ -1097,7 +1097,9 @@ async def generate_validated_question(
 
     # Multiple attempts are important because Gemini
     # may occasionally produce a duplicate or invalid question.
-    for attempt in range(4):
+    # Capped at 2 (not 4) so a bad run fails fast instead of
+    # quietly doubling quiz latency.
+    for attempt in range(2):
 
         try:
 
@@ -1108,9 +1110,35 @@ async def generate_validated_question(
                 question_type=question_type,
             )
 
-            validation = await validate_question(
-                question
-            )
+            # MCQ generation already returns a structured schema with
+            # an explicit is_correct flag per option, so a second full
+            # Gemini round-trip just to "validate" it is redundant
+            # latency for the common case — a free local check (exactly
+            # one correct option) catches the same failure mode
+            # instantly. Short-answer/numerical questions still get the
+            # real LLM validation, since their free-text expected_answer
+            # has no structural guarantee of correctness.
+            if question_type == "mcq":
+
+                correct_count = sum(
+                    1 for option in question.options
+                    if option.is_correct
+                )
+
+                validation = ValidationResult(
+                    passed=(correct_count == 1),
+                    notes=(
+                        ""
+                        if correct_count == 1
+                        else f"{correct_count} options marked correct, expected exactly 1."
+                    ),
+                )
+
+            else:
+
+                validation = await validate_question(
+                    question
+                )
 
             if validation.passed:
 
