@@ -21,6 +21,7 @@ import {
 import { Sidebar } from './components/Sidebar';
 import { QuizUploadModal } from './components/QuizUploadModal';
 import { MasteryPanel } from './components/MasteryPanel';
+import { CourseFlowMapModal } from './components/CourseFlowMapModal';
 
 import { LoginView } from './components/Views/LoginView';
 import { LandingView } from './components/Views/LandingView';
@@ -50,6 +51,7 @@ export default function App() {
   const [adaptiveSessionId, setAdaptiveSessionId] = useState<string | undefined>(undefined);
   const [quizResult, setQuizResult] = useState<QuizResult | null>(null);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
+  const [isCourseMapOpen, setIsCourseMapOpen] = useState<boolean>(false);
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
 
   // ==========================================================
@@ -398,6 +400,7 @@ export default function App() {
           dyslexiaMode={dyslexiaMode}
           setDyslexiaMode={setDyslexiaMode}
           onOpenUploadModal={() => setIsUploadModalOpen(true)}
+          onOpenCourseMap={() => setIsCourseMapOpen(true)}
         />
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
@@ -547,6 +550,11 @@ export default function App() {
           handleAdaptiveQuizStarted
         }
 
+      />
+
+      <CourseFlowMapModal
+        isOpen={isCourseMapOpen}
+        onClose={() => setIsCourseMapOpen(false)}
       />
 
     </div>

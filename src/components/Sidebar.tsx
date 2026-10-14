@@ -8,6 +8,7 @@ interface SidebarProps {
   dyslexiaMode: boolean;
   setDyslexiaMode: (enabled: boolean) => void;
   onOpenUploadModal: () => void;
+  onOpenCourseMap: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -16,6 +17,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   dyslexiaMode,
   setDyslexiaMode,
   onOpenUploadModal,
+  onOpenCourseMap,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -69,6 +71,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const handleNavClick = (id: string) => {
     if (id === 'landing') {
       onOpenUploadModal();
+    } else if (id === 'course-map') {
+      onOpenCourseMap();
     } else {
       setCurrentView(id as ViewMode);
     }
@@ -78,6 +82,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
     { id: 'quizzes-list', label: 'Quizzes', icon: 'quiz' },
     { id: 'landing', label: 'Upload Material', icon: 'upload_file' },
+    { id: 'course-map', label: 'Course Map', icon: 'account_tree' },
     { id: 'analytics', label: 'Analytics', icon: 'insights' },
     { id: 'quiz-results', label: 'Latest Results', icon: 'fact_check' },
   ];

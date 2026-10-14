@@ -1,8 +1,16 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
+interface TopicMastery {
+  mastery_score: number;
+  times_seen: number;
+  last_updated: string;
+}
+
 export const MasteryPanel: React.FC = () => {
-  const [mastery, setMastery] = useState<Record<string, number> | null>(null);
+  const [mastery, setMastery] = useState<Record<string, TopicMastery> | null>(
+    null
+  );
   const [isNewStudent, setIsNewStudent] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -83,7 +91,7 @@ export const MasteryPanel: React.FC = () => {
   }
 
   const topics = Object.entries(mastery || {}).sort(
-    ([, a], [, b]) => a - b
+    ([, a], [, b]) => a.mastery_score - b.mastery_score
   );
 
   if (topics.length === 0) {
@@ -114,13 +122,13 @@ export const MasteryPanel: React.FC = () => {
   return (
     <div className="bg-white p-8 rounded-3xl border border-purple-100 shadow-xs space-y-5">
       <p className="text-xs text-gray-500">
-        Per-topic mastery, updated after every adaptive quiz question.
-        Weakest topics are listed first.
+        Per-topic mastery, updated after every adaptive quiz question and
+        every tutor chat answer. Weakest topics are listed first.
       </p>
 
       <div className="space-y-4">
-        {topics.map(([topic, score]) => {
-          const percent = Math.round(score * 100);
+        {topics.map(([topic, info]) => {
+          const percent = Math.round(info.mastery_score * 100);
 
           const barColor =
             percent < 40
@@ -134,7 +142,10 @@ export const MasteryPanel: React.FC = () => {
               <div className="flex items-center justify-between text-xs">
                 <span className="font-bold text-[#222138]">{topic}</span>
                 <span className="font-semibold text-gray-500">
-                  {percent}%
+                  {percent}%{' '}
+                  <span className="text-gray-400 font-normal">
+                    ({info.times_seen}x)
+                  </span>
                 </span>
               </div>
               <div className="w-full bg-[#ececf4] h-2.5 rounded-full overflow-hidden">
