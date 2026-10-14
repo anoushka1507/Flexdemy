@@ -326,11 +326,6 @@ export const ActiveQuizView: React.FC<
     window.speechSynthesis.speak(qUtterance);
   };
 
-  const stopSpeaking = () => {
-    window.speechSynthesis.cancel();
-    setSpokenHighlight(null);
-  };
-
   // Stop any in-progress read-aloud when moving to a different
   // question, and when leaving this screen entirely (closing the
   // quiz, submitting, navigating away) — previously it kept talking
@@ -1394,17 +1389,6 @@ export const ActiveQuizView: React.FC<
                       className="flex items-center gap-1.5 text-xs font-bold text-white bg-[#7372A5] hover:bg-[#585785] hover:scale-105 px-3 py-1.5 rounded-xl transition-all shadow-sm"
                     >
                        Read Aloud
-                    </button>
-
-                    <button
-                      onClick={stopSpeaking}
-                      title="Stop reading"
-                      className="flex items-center gap-1 text-xs font-bold text-[#7372A5] bg-[#ececf4] hover:bg-[#d8d7e8] px-3 py-1.5 rounded-xl transition-all"
-                    >
-                      <span className="material-symbols-outlined text-sm">
-                        stop_circle
-                      </span>
-                      Stop
                     </button>
                   </>
                 )}
