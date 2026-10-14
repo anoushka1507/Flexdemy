@@ -1388,27 +1388,47 @@ def _cosine_similarity(
     return dot / (norm_a * norm_b)
 
 
+def _lexical_similarity(query: str, text: str) -> float:
+    import re
+    q_words = set(w for w in re.findall(r"\w+", query.lower()) if len(w) > 2)
+    if not q_words:
+        return 0.0
+    t_words = set(re.findall(r"\w+", text.lower()))
+    if not t_words:
+        return 0.0
+    overlap = len(q_words & t_words)
+    return overlap / len(q_words)
+
+
 async def retrieve_relevant_chunks(
     chunks: list[Chunk],
-    chunk_embeddings: list[list[float]],
+    chunk_embeddings: list[list[float]] | None,
     query: str,
     k: int = 4,
 ) -> list[tuple[Chunk, float]]:
 
-    if not chunks or not chunk_embeddings:
+    if not chunks:
         return []
 
-    query_embedding = (
-        await embed_texts([query])
-    )[0]
+    # Attempt semantic vector cosine retrieval when embeddings & client available
+    if chunk_embeddings and len(chunk_embeddings) == len(chunks) and client is not None:
+        try:
+            query_embedding = (await embed_texts([query]))[0]
+            scored = [
+                (chunk, _cosine_similarity(query_embedding, embedding))
+                for chunk, embedding in zip(chunks, chunk_embeddings)
+            ]
+            scored.sort(key=lambda pair: pair[1], reverse=True)
+            return scored[:k]
+        except Exception as e:
+            logger.warning("Vector retrieval failed, falling back to lexical matching: %s", e)
 
+    # Deterministic lexical overlap fallback (0 LLM tokens, works offline)
     scored = [
-        (chunk, _cosine_similarity(query_embedding, embedding))
-        for chunk, embedding in zip(chunks, chunk_embeddings)
+        (chunk, _lexical_similarity(query, chunk.text))
+        for chunk in chunks
     ]
-
     scored.sort(key=lambda pair: pair[1], reverse=True)
-
     return scored[:k]
 
 
@@ -1581,14 +1601,31 @@ async def answer_grounded_question(
 
     answer_text = (response.text or "").strip()
 
+    # Filter citations to chunks actually cited or directly supporting the claims
+    answer_lower = answer_text.lower()
+    used_chunks = []
+    for chunk, score in top_matches:
+        loc_str = chunk.locator.lower()
+        if (
+            loc_str in answer_lower
+            or f"chunk {chunk.chunk_index}" in answer_lower
+            or f"[{chunk.locator}]" in answer_text
+            or score >= 0.70
+        ):
+            used_chunks.append((chunk, score))
+
+    if not used_chunks:
+        used_chunks = top_matches[:2]
+
     citations = [
         Citation(
             chunk_index=chunk.chunk_index,
             locator=chunk.locator,
             excerpt=chunk.text[:280],
             source_type=chunk.source_type,
+            source_filename=chunk.source_filename,
         )
-        for chunk, _score in top_matches
+        for chunk, _score in used_chunks
     ]
 
     return GroundedChatResponse(

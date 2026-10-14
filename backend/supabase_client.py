@@ -176,8 +176,8 @@ async def upsert_mastery(
         times_seen = int(rows[0]["times_seen"]) if rows else 0
 
         if is_formative_chat:
-            # Formative chat engagement step: slight reinforcement (0 LLM tokens)
-            new_score = current_score + 0.02 * (1.0 - current_score)
+            # Student asked about this topic in chat: record engagement without artificially inflating mastery score
+            new_score = current_score
         else:
             # Standard BKT update: 0 LLM calls, pure psychometric math
             p_guess = 0.05 if question_type in ("numerical", "short_answer") else 0.20

@@ -627,7 +627,7 @@ export default function App() {
                 Analytics & Mastery Radar
               </h1>
 
-              <MasteryPanel onStartDiagnostic={() => setIsUploadOpen(true)} />
+              <MasteryPanel onStartDiagnostic={() => setIsUploadModalOpen(true)} />
 
             </div>
 

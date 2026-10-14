@@ -130,6 +130,11 @@ concept_extraction_cache: dict[
     list,
 ] = {}
 
+material_chunks_cache: dict[
+    str,
+    list[Chunk],
+] = {}
+
 
 # ============================================================
 # SESSION / MATERIAL PERSISTENCE (cache-aside over Supabase)
@@ -571,75 +576,104 @@ async def read_uploaded_material(
 ) -> list[Chunk]:
 
     file_bytes = await file.read()
+    await file.seek(0)
 
-    filename = (
-        file.filename or ""
-    ).lower()
+    if not file_bytes or len(file_bytes) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is empty (0 bytes). Please upload a valid study document or lecture video.",
+        )
 
+    if len(file_bytes) > 100 * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail="Uploaded file exceeds the maximum 100MB size limit.",
+        )
+
+    import hashlib
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+    if content_hash in material_chunks_cache:
+        return material_chunks_cache[content_hash]
+
+    raw_filename = file.filename or "uploaded_material"
+    filename = raw_filename.lower()
+
+    SUPPORTED_EXTENSIONS = (
+        ".pdf", ".pptx", ".txt", ".md",
+        ".mp4", ".mov", ".webm", ".mkv",
+    )
+
+    is_supported_ext = any(filename.endswith(ext) for ext in SUPPORTED_EXTENSIONS)
+    is_supported_mime = bool(
+        file.content_type and (
+            file.content_type.startswith("text/")
+            or file.content_type.startswith("video/")
+            or file.content_type == "application/pdf"
+            or file.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        )
+    )
+
+    if not is_supported_ext and not is_supported_mime:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Unsupported file format '{raw_filename}'. "
+                "Flexdemy supports PDF textbooks (.pdf), presentation slides (.pptx), "
+                "markdown/text notes (.md, .txt), and lecture videos (.mp4, .mov, .webm, .mkv)."
+            ),
+        )
+
+    chunks: list[Chunk] = []
 
     if (
         filename.endswith(".txt")
         or filename.endswith(".md")
-        or file.content_type == "text/plain"
+        or (file.content_type and file.content_type.startswith("text/"))
     ):
-
         try:
-
-            text = file_bytes.decode(
-                "utf-8"
-            )
-
+            text = file_bytes.decode("utf-8")
         except UnicodeDecodeError:
-
-            text = file_bytes.decode(
-                "latin-1"
-            )
-
+            text = file_bytes.decode("latin-1")
 
         from AI_Layer.ai_core import extract_text_and_chunk
+        chunks = extract_text_and_chunk(text, raw_filename)
 
-        return extract_text_and_chunk(
-            text,
-            file.filename or "",
-        )
-
-
-    if filename.endswith(".pptx"):
-
+    elif filename.endswith(".pptx") or (
+        file.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ):
         from AI_Layer.ai_core import extract_slide_deck
+        chunks = await extract_slide_deck(file_bytes, raw_filename)
 
-        return await extract_slide_deck(
-            file_bytes,
-            file.filename or "",
-        )
-
-
-    if filename.endswith(VIDEO_EXTENSIONS) or (
+    elif filename.endswith(VIDEO_EXTENSIONS) or (
         file.content_type or ""
     ).startswith("video/"):
-
         from AI_Layer.ai_core import extract_video
-
         ext = next(
             (e for e in VIDEO_EXTENSIONS if filename.endswith(e)),
             ".mp4",
         )
-
-        return await extract_video(
+        chunks = await extract_video(
             file_bytes,
             mime_type=VIDEO_MIME_BY_EXT.get(ext, "video/mp4"),
-            source_filename=file.filename or "",
+            source_filename=raw_filename,
         )
 
+    else:
+        # Default PDF extractor
+        from AI_Layer.ai_core import extract_and_chunk
+        chunks = await extract_and_chunk(file_bytes, raw_filename)
 
-    from AI_Layer.ai_core import (
-        extract_and_chunk,
-    )
+    # Standardize chunk metadata across formats (Requirement 1.2)
+    mime = file.content_type or "application/octet-stream"
+    for c in chunks:
+        c.content_hash = content_hash
+        c.doc_id = content_hash[:12]
+        c.mime_type = mime
+        if not c.source_filename:
+            c.source_filename = raw_filename
 
-    return await extract_and_chunk(
-        file_bytes,
-        file.filename or "",
-    )
+    material_chunks_cache[content_hash] = chunks
+    return chunks
 
 
 # ============================================================

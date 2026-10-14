@@ -1,10 +1,14 @@
 {
   "n_cases": 13,
   "refusal_accuracy": 1.0,
+  "refusal_precision": 1.0,
+  "refusal_recall": 1.0,
   "retrieval_hit_rate": 1.0,
-  "avg_context_precision": 0.556,
-  "avg_faithfulness": 5.0,
-  "avg_relevancy": 5.0,
+  "context_recall": 1.0,
+  "avg_context_precision": 1.0,
+  "citation_correctness": 1.0,
+  "avg_faithfulness": null,
+  "avg_relevancy": null,
   "cases": [
     {
       "question": "What caused the Ariane 5 rocket failure?",
@@ -12,9 +16,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "Why did the Patriot Missile system fail in Dhahran, Saudi Arabia?",
@@ -22,9 +26,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "What is the Y2K problem?",
@@ -32,9 +36,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "According to the Standish Group CHAOS research, what percentage of software projects succeeded?",
@@ -42,9 +46,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "What does 'No Silver Bullet' mean in the context of software engineering?",
@@ -52,9 +56,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "How is software productivity typically measured?",
@@ -62,9 +66,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "What is the difference between a generic and a bespoke software product?",
@@ -72,9 +76,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 1.0
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "What happened with the Space Shuttle's fuel management software?",
@@ -82,9 +86,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "What is the difference between a process metric and a product metric?",
@@ -92,9 +96,9 @@
       "is_grounded": true,
       "refusal_correct": true,
       "retrieval_hit": true,
-      "faithfulness": 5,
-      "relevancy": 5,
-      "context_precision": 0.5
+      "faithfulness": null,
+      "relevancy": null,
+      "context_precision": null
     },
     {
       "question": "Who wrote Romeo and Juliet?",

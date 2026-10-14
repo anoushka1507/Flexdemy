@@ -30,6 +30,12 @@ class Chunk(BaseModel):
         ),
     )
     source_filename: str = ""
+    content_hash: str = ""
+    mime_type: str = ""
+    doc_id: str = ""
+    topic_hint: str = ""
+    extraction_status: str = "ok"
+    warnings: list[str] = Field(default_factory=list)
 
 
 # ============================================================
@@ -300,6 +306,7 @@ class Citation(BaseModel):
     locator: str
     excerpt: str
     source_type: SourceType = "text"
+    source_filename: str = ""
 
 
 class GroundedChatResponse(BaseModel):
