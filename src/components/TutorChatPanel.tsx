@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { GroundedChatMessage, Citation } from '../types';
 
 interface TutorChatPanelProps {
@@ -68,6 +68,16 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
   const [language, setLanguage] = useState<ChatLanguage>('english');
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
+
+  // This component stays mounted even while closed (isOpen just
+  // makes it render null below), so speech wasn't stopping when the
+  // panel was closed — only an actual unmount would have triggered
+  // that. Watching isOpen directly instead.
+  useEffect(() => {
+    if (!isOpen && speechSynthesisSupported) {
+      window.speechSynthesis.cancel();
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
@@ -185,6 +195,18 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
             >
               {language === 'hindi' ? 'हिं' : 'EN'}
             </button>
+            {speechSynthesisSupported && (
+              <button
+                type="button"
+                onClick={() => window.speechSynthesis.cancel()}
+                title="Stop reading aloud"
+                className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
+              >
+                <span className="material-symbols-outlined text-base">
+                  stop_circle
+                </span>
+              </button>
+            )}
             <button
               onClick={onClose}
               className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
