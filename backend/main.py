@@ -115,6 +115,18 @@ materials: dict[
 ] = {}
 
 
+# Keyed by sha256(file bytes). Re-uploading the exact same file
+# (extremely common during testing/demo rehearsal) would otherwise
+# re-spend a Gemini call on concept extraction every single time —
+# this skips that when nothing about the file has changed. Not
+# durable across cold starts, but meaningfully cuts quota use within
+# a warm instance's lifetime, which is the common case.
+concept_extraction_cache: dict[
+    str,
+    list,
+] = {}
+
+
 # ============================================================
 # SESSION / MATERIAL PERSISTENCE (cache-aside over Supabase)
 #
@@ -803,11 +815,24 @@ async def start_adaptive_quiz(
 
         else:
 
-            concept_drafts = (
-                await extract_concepts(
-                    chunks
+            import hashlib
+
+            file_hash = hashlib.sha256(raw_bytes).hexdigest()
+            cached_drafts = concept_extraction_cache.get(file_hash)
+
+            if cached_drafts is not None:
+
+                concept_drafts = cached_drafts
+
+            else:
+
+                concept_drafts = (
+                    await extract_concepts(
+                        chunks
+                    )
                 )
-            )
+
+                concept_extraction_cache[file_hash] = concept_drafts
 
 
         concepts = (
@@ -1404,6 +1429,9 @@ class GroundedChatRequest(BaseModel):
     session_id: str
     message: str
     history: list[ChatTurn] = []
+    # "english" (default) or "hindi" (Hinglish explanation of the
+    # same, English-language source material).
+    language: str = "english"
 
 
 @app.post("/grounded-chat")
@@ -1438,6 +1466,7 @@ async def grounded_chat_api(
         material["embeddings"],
         request.history,
         request.message,
+        language=request.language,
     )
 
     # --------------------------------------------------------

@@ -94,11 +94,20 @@ def with_retry(
 
                 except Exception as e:
 
-                    if attempt == retries:
+                    # A rate-limit error won't resolve itself within
+                    # the next second or two — retrying immediately
+                    # just burns a second doomed request against the
+                    # same per-minute quota. Fail fast instead.
+                    rate_limited = (
+                        "RESOURCE_EXHAUSTED" in str(e)
+                        or "429" in str(e)
+                    )
+
+                    if attempt == retries or rate_limited:
 
                         if custom_exc:
                             raise custom_exc(
-                                f"Failed after {retries} retries "
+                                f"Failed after {attempt} retries "
                                 f"in {func.__name__}: {e}"
                             ) from e
 
@@ -1341,6 +1350,7 @@ async def answer_grounded_question(
     chunk_embeddings: list[list[float]],
     conversation_history: list[ChatTurn],
     student_message: str,
+    language: str = "english",
 ) -> GroundedChatResponse:
 
     if client is None:
@@ -1377,11 +1387,21 @@ async def answer_grounded_question(
         for turn in conversation_history[-6:]
     )
 
+    language_instruction = (
+        "Explain in Hinglish (a natural mix of Hindi and English, "
+        "written in Roman/Latin script, the way Indian students "
+        "actually speak) — even though the source material itself "
+        "is in English. Keep technical terms in English."
+        if language == "hindi"
+        else "Answer in English."
+    )
+
     prompt = (
         "You are a study tutor that must answer ONLY using the "
         "source excerpts below. Cite the exact [Source: ...] tag(s) "
         "you used inline in your answer. If the excerpts don't "
         "actually answer the question, say so instead of guessing.\n\n"
+        f"{language_instruction}\n\n"
         f"Source excerpts:\n{context_blocks}\n\n"
         f"Conversation so far:\n{history_text}\n\n"
         f"Student question:\n{student_message}"
