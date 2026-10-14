@@ -105,6 +105,87 @@ export default function App() {
   }, []);
 
   // ==========================================================
+  // QUIZ HISTORY (fetch once so the dashboard survives a refresh
+  // instead of resetting to empty — it was only ever held in React
+  // state before this, with nothing fetched back on load)
+  // ==========================================================
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadHistory = async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData.session?.access_token;
+      if (!accessToken) return;
+
+      try {
+        const response = await fetch('/api/quiz-history', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!response.ok || !mounted) return;
+
+        const data = await response.json();
+        const rows: any[] = data.history || [];
+        if (rows.length === 0) return;
+
+        const results: QuizResult[] = rows.map((row) => ({
+          quizId: row.quiz_id,
+          quizTitle: row.quiz_title,
+          scorePercentage: row.score_percentage,
+          totalQuestions: row.total_questions,
+          correctAnswersCount: row.correct_answers_count,
+          incorrectAnswersCount: row.total_questions - row.correct_answers_count,
+          timeSpentSeconds: 0,
+          dateCompleted: row.completed_at,
+          userAnswers: {},
+          topicBreakdown: [],
+        }));
+
+        setQuizResults(results);
+
+        setRecentHistory(
+          rows.slice(0, 4).map((row) => ({
+            id: row.quiz_id,
+            title: row.quiz_title,
+            topic: row.topic || row.quiz_title,
+            score: row.score_percentage,
+            date: new Date(row.completed_at).toLocaleDateString(),
+            icon: 'quiz',
+            difficulty: row.difficulty || 'Medium',
+          }))
+        );
+
+        const totalQuizzes = results.length;
+        const averageScore = Math.round(
+          results.reduce((sum, q) => sum + q.scorePercentage, 0) / totalQuizzes
+        );
+        const bestScore = Math.max(...results.map((q) => q.scorePercentage));
+        const totalQuestions = results.reduce((sum, q) => sum + q.totalQuestions, 0);
+        const totalCorrect = results.reduce((sum, q) => sum + q.correctAnswersCount, 0);
+        const accuracy =
+          totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
+
+        setUserProfile((profile) => ({
+          ...profile,
+          totalQuizzesAttempted: totalQuizzes,
+          averageScore,
+          bestScore,
+          accuracy,
+          overallProgress: averageScore,
+        }));
+      } catch {
+        // Best-effort — dashboard just stays empty if this fails.
+      }
+    };
+
+    loadHistory();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // ==========================================================
   // LOADING
   // ==========================================================
 
@@ -160,6 +241,36 @@ export default function App() {
     if (completedQuiz) {
       setActiveQuiz(completedQuiz);
     }
+
+    // Best-effort persistence so this result survives a refresh —
+    // fire-and-forget, doesn't block the UI update below.
+    (async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData.session?.access_token;
+        if (!accessToken) return;
+
+        await fetch('/api/record-quiz-result', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            quiz_id: result.quizId,
+            quiz_title: result.quizTitle,
+            topic: completedQuiz?.topic || activeQuiz?.topic || '',
+            difficulty: completedQuiz?.difficulty || activeQuiz?.difficulty || 'Medium',
+            score_percentage: result.scorePercentage,
+            total_questions: result.totalQuestions,
+            correct_answers_count: result.correctAnswersCount,
+          }),
+        });
+      } catch {
+        // Best-effort — local state (set below) still shows the
+        // result for this session even if the save failed.
+      }
+    })();
 
     setQuizResult(result);
     setRecentHistory((prev) => [

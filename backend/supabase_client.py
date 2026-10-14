@@ -343,3 +343,57 @@ async def load_quiz_material_data(session_id: str) -> dict | None:
     except Exception as e:
         logger.warning("load_quiz_material_data failed: %s", e)
         return None
+
+
+# ============================================================
+# QUIZ HISTORY (dashboard stats survive a page refresh)
+# ============================================================
+
+async def record_quiz_result(
+    client: Client | None,
+    user_id: str | None,
+    quiz_id: str,
+    quiz_title: str,
+    topic: str,
+    difficulty: str,
+    score_percentage: float,
+    total_questions: int,
+    correct_answers_count: int,
+) -> None:
+
+    if client is None or user_id is None:
+        return
+
+    try:
+        client.table("quiz_history").insert(
+            {
+                "user_id": user_id,
+                "quiz_id": quiz_id,
+                "quiz_title": quiz_title,
+                "topic": topic,
+                "difficulty": difficulty,
+                "score_percentage": score_percentage,
+                "total_questions": total_questions,
+                "correct_answers_count": correct_answers_count,
+            }
+        ).execute()
+
+    except Exception as e:
+        logger.warning("record_quiz_result failed: %s", e)
+
+
+async def fetch_quiz_history(client: Client | None) -> list[dict]:
+
+    if client is None:
+        return []
+
+    try:
+        result = client.table("quiz_history").select("*").order(
+            "completed_at", desc=True
+        ).limit(50).execute()
+
+        return result.data or []
+
+    except Exception as e:
+        logger.warning("fetch_quiz_history failed: %s", e)
+        return []

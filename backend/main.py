@@ -67,11 +67,13 @@ from AI_Layer.models import (
 from backend.supabase_client import (
     fetch_asked_question_texts,
     fetch_mastery,
+    fetch_quiz_history,
     get_user_client,
     get_user_id,
     load_quiz_material_data,
     load_quiz_session_data,
     record_asked_question,
+    record_quiz_result,
     save_quiz_material_data,
     save_quiz_session_data,
     upsert_mastery,
@@ -1634,6 +1636,62 @@ async def mastery_api(
         # framing instead of silently defaulting every score to 0.3.
         "is_new_student": len(mastery) == 0,
     }
+
+
+# ============================================================
+# QUIZ HISTORY (dashboard stats survive a page refresh)
+# ============================================================
+
+class QuizHistoryEntry(BaseModel):
+    quiz_id: str
+    quiz_title: str
+    topic: str = ""
+    difficulty: str = "Medium"
+    score_percentage: float
+    total_questions: int
+    correct_answers_count: int
+
+
+@app.post("/record-quiz-result")
+async def record_quiz_result_api(
+    request: QuizHistoryEntry,
+    authorization: str | None = Header(None),
+):
+
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+
+    await record_quiz_result(
+        sb_client,
+        user_id,
+        request.quiz_id,
+        request.quiz_title,
+        request.topic,
+        request.difficulty,
+        request.score_percentage,
+        request.total_questions,
+        request.correct_answers_count,
+    )
+
+    return {"recorded": sb_client is not None and user_id is not None}
+
+
+@app.get("/quiz-history")
+async def quiz_history_api(
+    authorization: str | None = Header(None),
+):
+
+    sb_client = get_user_client(authorization)
+
+    if sb_client is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to view your quiz history.",
+        )
+
+    history = await fetch_quiz_history(sb_client)
+
+    return {"history": history}
 
 
 # ============================================================
