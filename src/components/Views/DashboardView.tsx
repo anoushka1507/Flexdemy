@@ -6,6 +6,7 @@ interface DashboardViewProps {
   setCurrentView: (view: ViewMode) => void;
   userProfile: UserProfile;
   onStartQuiz: (quiz: Quiz) => void;
+  onOpenQuizResult: (quizId: string) => void;
   sampleQuizzes: Quiz[];
   quizResults: QuizResult[];
   recentHistory: Array<{ id: string; title: string; topic: string; score: number; date: string; icon: string; difficulty: string }>;
@@ -16,6 +17,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   setCurrentView,
   userProfile,
   onStartQuiz,
+  onOpenQuizResult,
   sampleQuizzes,
   quizResults,
   recentHistory,
@@ -242,13 +244,10 @@ const topicStrength =
                     {q.score}%
                   </span>
                   <button
-                    onClick={() => {
-                      const match = sampleQuizzes.find((sq) => sq.id === q.id || sq.title.includes(q.topic)) || sampleQuizzes[0];
-                      onStartQuiz(match);
-                    }}
+                    onClick={() => onOpenQuizResult(q.id)}
                     className="text-xs text-[#7372A5] hover:underline font-bold"
                   >
-                    Retake
+                    View Results
                   </button>
                 </div>
               </div>
