@@ -7,6 +7,7 @@ interface SidebarProps {
   setCurrentView: (view: ViewMode) => void;
   dyslexiaMode: boolean;
   setDyslexiaMode: (enabled: boolean) => void;
+  onOpenUploadModal: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -14,6 +15,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   setCurrentView,
   dyslexiaMode,
   setDyslexiaMode,
+  onOpenUploadModal,
 }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -41,6 +43,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
     : isGuest
     ? 'Guest'
     : '...';
+
+  // "Upload Material" previously navigated to the pre-login landing
+  // page (losing the sidebar entirely, leaving only the upload/quiz
+  // flow reachable). It should just open the upload modal in place.
+  const handleNavClick = (id: string) => {
+    if (id === 'landing') {
+      onOpenUploadModal();
+    } else {
+      setCurrentView(id as ViewMode);
+    }
+  };
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -99,7 +112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 key={item.id}
                 onClick={() => {
-                  setCurrentView(item.id as ViewMode);
+                  handleNavClick(item.id);
                   setMobileMenuOpen(false);
                 }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
@@ -178,7 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               return (
                 <button
                   key={item.id}
-                  onClick={() => setCurrentView(item.id as ViewMode)}
+                  onClick={() => handleNavClick(item.id)}
                   className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
                     isActive
                       ? 'bg-[#ececf4] text-[#7372A5] font-bold border-l-4 border-[#7372A5] pl-3 shadow-2xs'
