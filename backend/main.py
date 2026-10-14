@@ -1511,6 +1511,64 @@ async def grounded_chat_api(
 
 
 # ============================================================
+# REVISION FLASHCARDS (Track D, Requirement 6b)
+# ============================================================
+
+class FlashcardRequest(BaseModel):
+    session_id: str
+    topic: str
+    count: int = 6
+
+
+@app.post("/generate-flashcards")
+async def generate_flashcards_api(request: FlashcardRequest):
+
+    from AI_Layer.ai_core import (
+        generate_flashcards,
+        embed_texts,
+    )
+
+    material = await get_material(request.session_id)
+
+    if material is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No ingested material found for this session.",
+        )
+
+    chunks = material["chunks"]
+
+    if material["embeddings"] is None:
+        material["embeddings"] = await embed_texts(
+            [chunk.text for chunk in chunks]
+        )
+        await save_material(request.session_id, material)
+
+    count = max(1, min(request.count, 15))
+
+    flashcards = await generate_flashcards(
+        request.topic,
+        chunks,
+        material["embeddings"],
+        count=count,
+    )
+
+    if not flashcards:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Could not find anything in the uploaded material "
+                "about this topic to make flashcards from."
+            ),
+        )
+
+    return {
+        "topic": request.topic,
+        "flashcards": [f.model_dump() for f in flashcards],
+    }
+
+
+# ============================================================
 # SOURCE FILE SERVING (for citation "open at location" links)
 # ============================================================
 

@@ -302,6 +302,20 @@ class GroundedChatResponse(BaseModel):
 
 
 # ============================================================
+# 1.7b REVISION FLASHCARDS (Track D, Requirement 6b)
+# ============================================================
+
+class Flashcard(BaseModel):
+    front: str = Field(
+        description="Short question, term, or prompt side."
+    )
+    back: str = Field(
+        description="The answer or explanation side."
+    )
+    source_locator: str = ""
+
+
+# ============================================================
 # 1.8 LEARNER MODEL
 # ============================================================
 
