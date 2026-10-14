@@ -26,6 +26,7 @@ from AI_Layer.models import (
     Concept,
     ConceptDraft,
     Difficulty,
+    Flashcard,
     GroundedChatResponse,
     QuestionDraft,
     QuizReportData,
@@ -1338,6 +1339,72 @@ async def retrieve_relevant_chunks(
     scored.sort(key=lambda pair: pair[1], reverse=True)
 
     return scored[:k]
+
+
+# ============================================================
+# REVISION FLASHCARDS (Track D, Requirement 6b)
+# ============================================================
+
+@with_retry(retries=1, custom_exc=QuestionGenerationError)
+async def generate_flashcards(
+    topic: str,
+    chunks: list[Chunk],
+    chunk_embeddings: list[list[float]],
+    count: int = 6,
+) -> list[Flashcard]:
+    """
+    Revision flashcards for a weak topic, grounded in whatever part
+    of the uploaded material is actually about that topic (same
+    retrieval the tutor chat uses) — not freely invented.
+    """
+
+    if client is None:
+        raise QuestionGenerationError(
+            "Gemini client is not initialized."
+        )
+
+    top_matches = await retrieve_relevant_chunks(
+        chunks,
+        chunk_embeddings,
+        topic,
+        k=4,
+    )
+
+    if not top_matches:
+        return []
+
+    context_blocks = "\n\n".join(
+        f"[Source: {chunk.locator}]\n{chunk.text}"
+        for chunk, _score in top_matches
+    )
+
+    prompt = (
+        f"Create {count} revision flashcards for a student who is "
+        f"weak on the topic '{topic}', using ONLY the source "
+        "material below. Each flashcard's 'front' is a short "
+        "question or term, and 'back' is the answer/explanation. "
+        "Also set 'source_locator' to the exact [Source: ...] tag "
+        "the flashcard's content came from.\n\n"
+        f"Source material:\n{context_blocks}"
+    )
+
+    response = await client.aio.models.generate_content(
+        model=MODEL_TEXT,
+        contents=prompt,
+        config=genai.types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=list[Flashcard],
+            temperature=0.3,
+        ),
+    )
+
+    flashcards = TypeAdapter(
+        list[Flashcard]
+    ).validate_json(
+        response.text
+    )
+
+    return flashcards[:count]
 
 
 # ============================================================
