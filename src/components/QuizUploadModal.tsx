@@ -12,6 +12,7 @@ interface ConceptDraft {
   label: string;
   description: string;
   topic: string;
+  subtopic: string;
   prerequisites: string[];
   source_chunk_index: number;
 }
@@ -361,6 +362,43 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
                       Select at least one topic, or the full material will be used instead.
                     </p>
                   )}
+
+                  <div className="mt-3 pt-3 border-t border-[#d8d7e8] space-y-2 max-h-40 overflow-y-auto">
+                    {uniqueTopics.map((t) => {
+                      const conceptsInTopic = extractedConcepts.filter(
+                        (c) => c.topic === t
+                      );
+
+                      const subtopics = Array.from(
+                        new Set(
+                          conceptsInTopic
+                            .map((c) => c.subtopic)
+                            .filter((s) => s)
+                        )
+                      );
+
+                      return (
+                        <div key={t} className="text-[11px]">
+                          <p className="font-bold text-[#222138]">{t}</p>
+                          {subtopics.length > 0 && (
+                            <p className="text-gray-500 ml-2">
+                              Subtopics: {subtopics.join(', ')}
+                            </p>
+                          )}
+                          {conceptsInTopic.map((c) => (
+                            <p key={c.label} className="text-gray-500 ml-2">
+                              • {c.label}
+                              {c.prerequisites.length > 0 && (
+                                <span className="text-[#7372A5]">
+                                  {' '}(requires: {c.prerequisites.join(', ')})
+                                </span>
+                              )}
+                            </p>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
