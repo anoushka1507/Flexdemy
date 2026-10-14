@@ -1,4 +1,4 @@
-# FlexQuizz — Architecture, Grounding, and Learner Model
+# Flexdemy — Architecture, Grounding, and Learner Model
 
 This document covers the Track D submission requirements: system
 architecture, the source-grounding method, and the learner-model approach.

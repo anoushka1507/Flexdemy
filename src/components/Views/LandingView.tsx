@@ -26,7 +26,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
             <span className="material-symbols-outlined text-2xl">bolt</span>
           </div>
           <span className="text-xl font-bold tracking-tight text-[#222138]">
-            Flex<span className="text-[#7372A5]">Quizz</span>
+            Flex<span className="text-[#7372A5]">demy</span>
           </span>
         </div>
 
@@ -208,7 +208,7 @@ export const LandingView: React.FC<LandingViewProps> = ({
       <section id="how-it-works" className="py-16 max-w-7xl mx-auto px-6">
         <div className="text-center max-w-xl mx-auto mb-12">
           <span className="text-xs font-bold text-[#7372A5] uppercase tracking-wider">Simple Process</span>
-          <h2 className="text-3xl font-extrabold text-[#222138] mt-1">How FlexQuizz Works</h2>
+          <h2 className="text-3xl font-extrabold text-[#222138] mt-1">How Flexdemy Works</h2>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -245,9 +245,9 @@ export const LandingView: React.FC<LandingViewProps> = ({
             <div className="w-8 h-8 rounded-lg bg-[#7372A5] flex items-center justify-center text-white">
               <span className="material-symbols-outlined text-xl">bolt</span>
             </div>
-            <span className="text-lg font-bold text-white">FlexQuizz</span>
+            <span className="text-lg font-bold text-white">Flexdemy</span>
           </div>
-          <p>&copy; {new Date().getFullYear()} FlexQuizz Inc. All rights reserved.</p>
+          <p>&copy; {new Date().getFullYear()} Flexdemy Inc. All rights reserved.</p>
         </div>
       </footer>
 

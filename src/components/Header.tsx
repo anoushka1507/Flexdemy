@@ -72,7 +72,7 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
           <div>
             <span className="text-xl font-bold tracking-tight text-[#222138] font-display flex items-center gap-1">
-              Flex<span className="text-[#7372A5]">Quizz</span>
+              Flex<span className="text-[#7372A5]">demy</span>
             </span>
             <span className="text-[10px] uppercase tracking-wider font-semibold text-[#7372A5] block -mt-1">
               AI Adaptive Platform

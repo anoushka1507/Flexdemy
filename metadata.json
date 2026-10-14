@@ -1,5 +1,5 @@
 {
-  "name": "FlexQuizz",
+  "name": "Flexdemy",
   "description": "AI-powered adaptive quiz platform featuring dyslexia-friendly accessibility mode, smart material processing, and interactive performance insights.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

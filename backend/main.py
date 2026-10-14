@@ -85,7 +85,7 @@ from backend.supabase_client import (
 # ============================================================
 
 app = FastAPI(
-    title="FlexQuizz API"
+    title="Flexdemy API"
 )
 app.add_middleware(
     CORSMiddleware,
@@ -226,7 +226,7 @@ async def save_material(session_id: str, material: dict) -> None:
 def root():
 
     return {
-        "message": "FlexQuizz API is running"
+        "message": "Flexdemy API is running"
     }
 
 

@@ -205,7 +205,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
               <span className="material-symbols-outlined text-xl">bolt</span>
             </div>
             <span className="text-xl font-bold tracking-tight text-[#222138]">
-              Flex<span className="text-[#7372A5]">Quizz</span>
+              Flex<span className="text-[#7372A5]">demy</span>
             </span>
           </button>
           

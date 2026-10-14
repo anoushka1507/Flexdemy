@@ -1,18 +1,18 @@
-# FlexQuizz
+# Flexdemy
 
 ### Your Notes. Your Pace. Your Rules.
 
-FlexQuizz is an AI-powered, inclusive adaptive learning platform that transforms a learner's own study material into personalized practice quizzes.
+Flexdemy is an AI-powered, inclusive adaptive learning platform that transforms a learner's own study material into personalized practice quizzes.
 
 It is designed around a simple idea:
 
 > The assessment should adapt to the learner, not force every learner through the same question bank.
 
-FlexQuizz combines AI-generated assessment, adaptive difficulty, concept-level performance tracking, multimodal study-material ingestion, and accessibility features into one learning experience.
+Flexdemy combines AI-generated assessment, adaptive difficulty, concept-level performance tracking, multimodal study-material ingestion, and accessibility features into one learning experience.
 
 ---
 
-# Why FlexQuizz?
+# Why Flexdemy?
 
 Digital education can still be a rigid, one-size-fits-all experience, especially for learners who rely on informal or handwritten study material.
 
@@ -22,7 +22,7 @@ Traditional assessment platforms commonly have three limitations:
 * Generic learning platforms may not provide sufficient accessibility features for learners with dyslexia and other learning differences.
 * Many systems assume clean, digital text and do not account for the handwritten notes that are common in everyday study.
 
-FlexQuizz addresses these problems with a software-first adaptive assessment engine that turns study material into dynamic practice.
+Flexdemy addresses these problems with a software-first adaptive assessment engine that turns study material into dynamic practice.
 
 ---
 
@@ -30,17 +30,17 @@ FlexQuizz addresses these problems with a software-first adaptive assessment eng
 
 ## "Your Notes. Your Pace. Your Rules."
 
-FlexQuizz's USP is the combination of three layers of personalization:
+Flexdemy's USP is the combination of three layers of personalization:
 
 ### 1. Your Material
 
-Instead of forcing learners to study from a fixed question bank, FlexQuizz works from their own learning material.
+Instead of forcing learners to study from a fixed question bank, Flexdemy works from their own learning material.
 
 The intended multimodal ingestion layer can process both conventional documents and informal study material such as handwritten notes, using Gemini's vision capabilities to turn visual content into structured study data.
 
 ### 2. Your Knowledge Gaps
 
-FlexQuizz tracks performance at the concept level.
+Flexdemy tracks performance at the concept level.
 
 If a learner repeatedly struggles with one concept, the adaptive engine can prioritize that concept instead of wasting questions on material the learner has already mastered.
 
@@ -72,7 +72,7 @@ This allows the quiz to be based on the learner's own material and continuously 
 
 ## Zero-Shot Adaptive Scaling
 
-FlexQuizz eliminates the dependence on a traditional fixed question bank.
+Flexdemy eliminates the dependence on a traditional fixed question bank.
 
 The adaptive engine:
 
@@ -90,7 +90,7 @@ The result is a quiz that changes as the learner changes.
 
 ## Multimodal Ingestion: The Analog Bridge
 
-FlexQuizz is designed to bridge the gap between analog study habits and AI-powered education.
+Flexdemy is designed to bridge the gap between analog study habits and AI-powered education.
 
 A learner may study from:
 
@@ -108,7 +108,7 @@ This makes the system particularly relevant to environments where students commo
 
 ## Dyslexia-First Accessibility
 
-FlexQuizz includes a dedicated accessibility mode designed to reduce the cognitive load associated with heavy reading.
+Flexdemy includes a dedicated accessibility mode designed to reduce the cognitive load associated with heavy reading.
 
 The accessibility experience includes:
 
@@ -124,7 +124,7 @@ The goal is to make the same learning content available through both visual and 
 
 ## Native Text-to-Speech
 
-FlexQuizz uses the browser's native Web Speech API through:
+Flexdemy uses the browser's native Web Speech API through:
 
 ```javascript
 window.speechSynthesis
@@ -206,7 +206,7 @@ This allows text to be read aloud without requiring a separate third-party audio
 
 # Adaptive Quiz Logic
 
-FlexQuizz maintains a state for every concept.
+Flexdemy maintains a state for every concept.
 
 For example:
 
@@ -327,7 +327,7 @@ This keeps the learner in a more appropriate difficulty zone and helps reduce bo
 
 ## Frontend
 
-FlexQuizz uses:
+Flexdemy uses:
 
 * React 19
 * TypeScript
@@ -444,7 +444,7 @@ Row Level Security is used to keep user-owned application data isolated.
 # Project Structure
 
 ```text
-FlexQuizz/
+Flexdemy/
 │
 ├── AI_Layer/
 │   ├── ai_core.py
@@ -495,8 +495,8 @@ Install:
 # 1. Clone the Repository
 
 ```bash
-git clone https://github.com/Asdaqa16/FlexQuizz.git
-cd FlexQuizz
+git clone https://github.com/apoorva-6575/Flexdemy.git
+cd Flexdemy
 ```
 
 ---
@@ -571,7 +571,7 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```text
-FlexQuizz/
+Flexdemy/
 ├── .env
 ├── backend/
 ├── AI_Layer/
@@ -619,7 +619,7 @@ The Gemini key is required by the AI/adaptive backend.
 Your local setup should look like:
 
 ```text
-FlexQuizz/
+Flexdemy/
 │
 ├── .env
 │   ├── VITE_SUPABASE_URL
@@ -640,7 +640,7 @@ Do not commit either `.env` file.
 
 ---
 
-# Running FlexQuizz
+# Running Flexdemy
 
 The recommended development workflow uses two terminals.
 
@@ -695,7 +695,7 @@ Open a new terminal.
 Go to the project root:
 
 ```bash
-cd FlexQuizz
+cd Flexdemy
 ```
 
 Start the Vite frontend:
@@ -716,7 +716,7 @@ Open that URL in your browser.
 
 # Login
 
-FlexQuizz uses Supabase Authentication.
+Flexdemy uses Supabase Authentication.
 
 For a demonstration account, use the credentials provided separately by the project team or evaluator.
 
@@ -800,7 +800,7 @@ This allows the learner to interact with the same educational material through a
 
 ## For Students
 
-FlexQuizz aims to:
+Flexdemy aims to:
 
 * Reduce rote memorization.
 * Encourage conceptual understanding.
@@ -818,7 +818,7 @@ The accessibility layer provides:
 
 ## For Bharat
 
-FlexQuizz is specifically positioned as a bridge between:
+Flexdemy is specifically positioned as a bridge between:
 
 ```text
 Local analog study habits
@@ -910,14 +910,14 @@ If a key is accidentally exposed:
 
 GitHub:
 
-https://github.com/Asdaqa16/FlexQuizz
+https://github.com/apoorva-6575/Flexdemy
 
 ---
 
-# FlexQuizz
+# Flexdemy
 
 ### Your Notes. Your Pace. Your Rules.
 
-FlexQuizz is built around one core principle:
+Flexdemy is built around one core principle:
 
 > Personalized education should adapt to the learner's material, comprehension, pace, and accessibility needs.
