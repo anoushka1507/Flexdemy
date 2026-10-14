@@ -42,6 +42,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
   const [extractingTopics, setExtractingTopics] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const toggleQuestionType = (value: string) => {
     setQuestionTypes((prev) => {
@@ -129,11 +130,12 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
   e.preventDefault();
 
   if (!selectedFile) {
-    console.error('Please select a PDF file.');
+    setSubmitError('Please select a file to upload.');
     return;
   }
 
   setLoading(true);
+  setSubmitError(null);
 
   try {
     const formData = new FormData();
@@ -164,9 +166,21 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(
-        `Quiz generation failed: ${response.status} ${errorText}`
-      );
+
+      if (errorText.includes('RESOURCE_EXHAUSTED')) {
+        throw new Error(
+          "The AI is handling too many requests right now (free-tier rate limit). Wait about a minute and try again."
+        );
+      }
+
+      let detail = errorText;
+      try {
+        detail = JSON.parse(errorText)?.detail || errorText;
+      } catch {
+        // errorText wasn't JSON, use it as-is
+      }
+
+      throw new Error(detail || `Quiz generation failed (${response.status})`);
     }
 
     const data = await response.json();
@@ -198,6 +212,9 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
   } catch (err) {
     console.error('Quiz generation error:', err);
+    setSubmitError(
+      err instanceof Error ? err.message : 'Could not generate the quiz. Please try again.'
+    );
   } finally {
     setLoading(false);
   }
@@ -403,6 +420,12 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
               ))}
             </div>
           </div>
+
+          {submitError && (
+            <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+              {submitError}
+            </div>
+          )}
 
           {/* Submit Button */}
           <div className="pt-2">
