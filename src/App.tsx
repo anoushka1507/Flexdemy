@@ -383,6 +383,7 @@ export default function App() {
         setDyslexiaMode={setDyslexiaMode}
         onRetakeQuiz={() => handleStartQuiz(activeQuiz)}
         onStartAnotherQuiz={() => setCurrentView('landing')}
+        sessionId={adaptiveSessionId}
       />
     );
   }
