@@ -56,6 +56,40 @@ def get_user_client(authorization_header: str | None) -> Client | None:
     return client
 
 
+def get_user_id(authorization_header: str | None) -> str | None:
+    """
+    Extract the user id (JWT 'sub' claim) from the session token so
+    writes can set user_id explicitly — RLS's WITH CHECK validates
+    it, but does not fill it in for us, and the not-null columns on
+    topic_mastery/asked_questions reject an insert that omits it.
+    Decoded locally (no signature check) purely to get the id to
+    write; RLS at the database is still the real security boundary.
+    """
+
+    if not authorization_header or not authorization_header.startswith(
+        "Bearer "
+    ):
+        return None
+
+    token = authorization_header.removeprefix("Bearer ").strip()
+
+    try:
+        import base64
+        import json
+
+        payload_b64 = token.split(".")[1]
+        padding = "=" * (-len(payload_b64) % 4)
+        payload = json.loads(
+            base64.urlsafe_b64decode(payload_b64 + padding)
+        )
+
+        return payload.get("sub")
+
+    except Exception as e:
+        logger.warning("get_user_id failed to decode token: %s", e)
+        return None
+
+
 def question_hash(topic: str, question_text: str) -> str:
 
     normalized = " ".join(
@@ -90,9 +124,10 @@ async def upsert_mastery(
     topic: str,
     is_correct: bool,
     learning_rate: float = 0.3,
+    user_id: str | None = None,
 ) -> None:
 
-    if client is None:
+    if client is None or user_id is None:
         return
 
     try:
@@ -116,6 +151,7 @@ async def upsert_mastery(
 
         client.table("topic_mastery").upsert(
             {
+                "user_id": user_id,
                 "topic": topic,
                 "mastery_score": new_score,
                 "times_seen": times_seen + 1,
@@ -153,14 +189,16 @@ async def record_asked_question(
     client: Client | None,
     topic: str,
     question_text: str,
+    user_id: str | None = None,
 ) -> None:
 
-    if client is None:
+    if client is None or user_id is None:
         return
 
     try:
         client.table("asked_questions").upsert(
             {
+                "user_id": user_id,
                 "topic": topic,
                 "question_text": question_text,
                 "question_hash": question_hash(topic, question_text),
