@@ -1,10 +1,35 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { GroundedChatMessage, Citation } from '../types';
 
 interface TutorChatPanelProps {
   isOpen: boolean;
   onClose: () => void;
   sessionId?: string;
+}
+
+type ChatLanguage = 'english' | 'hindi';
+
+// Browser-native voice support (Track D optional 6e). No backend
+// involved — speech-to-text fills the input box, text-to-speech
+// reads an answer aloud. Falls back to disabled buttons on browsers
+// without support instead of erroring.
+const SpeechRecognitionCtor: any =
+  (typeof window !== 'undefined' &&
+    ((window as any).SpeechRecognition ||
+      (window as any).webkitSpeechRecognition)) ||
+  null;
+
+const speechSynthesisSupported =
+  typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+function speakText(text: string, language: ChatLanguage) {
+  if (!speechSynthesisSupported) return;
+
+  window.speechSynthesis.cancel();
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = language === 'hindi' ? 'hi-IN' : 'en-IN';
+  window.speechSynthesis.speak(utterance);
 }
 
 // Source files don't have a native "jump to location" viewer for
@@ -40,8 +65,37 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [language, setLanguage] = useState<ChatLanguage>('english');
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
   if (!isOpen) return null;
+
+  const handleToggleListening = () => {
+    if (!SpeechRecognitionCtor) return;
+
+    if (isListening) {
+      recognitionRef.current?.stop();
+      return;
+    }
+
+    const recognition = new SpeechRecognitionCtor();
+    recognition.lang = language === 'hindi' ? 'hi-IN' : 'en-IN';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results?.[0]?.[0]?.transcript;
+      if (transcript) setInput(transcript);
+    };
+
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+
+    recognitionRef.current = recognition;
+    setIsListening(true);
+    recognition.start();
+  };
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -67,6 +121,7 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
           session_id: sessionId,
           message: question,
           history: messages.map((m) => ({ role: m.role, text: m.text })),
+          language,
         }),
       });
 
@@ -117,12 +172,26 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
               Answers are grounded in your uploaded material
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                setLanguage((prev) =>
+                  prev === 'english' ? 'hindi' : 'english'
+                )
+              }
+              title="Switch answer language"
+              className="px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 text-[11px] font-bold text-white"
+            >
+              {language === 'hindi' ? 'हिं' : 'EN'}
+            </button>
+            <button
+              onClick={onClose}
+              className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3 text-left">
@@ -148,7 +217,21 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
                     : 'bg-[#ececf4] text-[#222138]'
                 }`}
               >
-                <p className="whitespace-pre-wrap">{message.text}</p>
+                <div className="flex items-start gap-1.5">
+                  <p className="whitespace-pre-wrap flex-1">{message.text}</p>
+                  {message.role === 'model' && speechSynthesisSupported && (
+                    <button
+                      type="button"
+                      onClick={() => speakText(message.text, language)}
+                      title="Read this answer aloud"
+                      className="shrink-0 text-gray-400 hover:text-[#7372A5]"
+                    >
+                      <span className="material-symbols-outlined text-sm">
+                        volume_up
+                      </span>
+                    </button>
+                  )}
+                </div>
 
                 {message.citations && message.citations.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">
@@ -211,10 +294,29 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about your notes..."
+            placeholder={
+              isListening ? 'Listening...' : 'Ask about your notes...'
+            }
             disabled={loading || !sessionId}
             className="flex-1 px-3 py-2 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#7372A5]/50 text-xs"
           />
+          {SpeechRecognitionCtor && (
+            <button
+              type="button"
+              onClick={handleToggleListening}
+              disabled={loading || !sessionId}
+              title={isListening ? 'Stop listening' : 'Ask by voice'}
+              className={`w-8 h-8 shrink-0 rounded-xl flex items-center justify-center disabled:opacity-50 ${
+                isListening
+                  ? 'bg-red-500 text-white'
+                  : 'bg-[#ececf4] text-[#7372A5] hover:bg-[#d8d7e8]'
+              }`}
+            >
+              <span className="material-symbols-outlined text-lg">
+                {isListening ? 'mic' : 'mic_none'}
+              </span>
+            </button>
+          )}
           <button
             type="submit"
             disabled={loading || !input.trim() || !sessionId}
