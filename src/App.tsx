@@ -86,7 +86,13 @@ export default function App() {
       if (!mounted) return;
 
       if (event === 'SIGNED_IN') {
-        setCurrentView('dashboard');
+        // Supabase re-validates the session (and re-fires this
+        // same event) whenever the tab regains focus/visibility —
+        // not just on an actual fresh sign-in. Only navigate away
+        // if the user was genuinely on the login screen; otherwise
+        // this would yank them out of an active quiz, a chat, or
+        // anywhere else just for switching windows and back.
+        setCurrentView((prev) => (prev === 'login' ? 'dashboard' : prev));
       } else if (event === 'SIGNED_OUT') {
         setCurrentView('login');
       }
