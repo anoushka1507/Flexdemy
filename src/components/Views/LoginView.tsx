@@ -81,7 +81,7 @@ const [signupMessage, setSignupMessage] = useState('');
             <span className="material-symbols-outlined text-2xl">bolt</span>
           </div>
           <span className="text-2xl font-bold tracking-tight text-[#222138]">
-            Flex<span className="text-[#7372A5]">Quizz</span>
+            Flex<span className="text-[#7372A5]">demy</span>
           </span>
         </div>
 
@@ -349,7 +349,7 @@ const [signupMessage, setSignupMessage] = useState('');
 
       {/* Footer */}
       <footer className="p-4 border-t border-[#d8d7e8] text-center text-xs text-gray-400">
-        &copy; {new Date().getFullYear()} FlexQuizz Inc. Accessibility first learning.
+        &copy; {new Date().getFullYear()} Flexdemy Inc. Accessibility first learning.
       </footer>
 
     </div>

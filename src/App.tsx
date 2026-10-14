@@ -208,7 +208,7 @@ export default function App() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f6f6fa]">
         <div className="text-sm font-semibold text-[#7372A5]">
-          Loading FlexQuizz...
+          Loading Flexdemy...
         </div>
       </div>
     );
