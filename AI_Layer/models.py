@@ -220,6 +220,12 @@ class AdaptiveSession(BaseModel):
 
     is_diagnostic: bool = False
 
+    user_id: str | None = None
+
+    answered_results: dict[int, dict] = Field(
+        default_factory=dict
+    )
+
     history: list[AdaptiveQuestion] = Field(
         default_factory=list
     )

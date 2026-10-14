@@ -4,6 +4,7 @@ import React, {
 } from 'react';
 
 import { TutorChatPanel } from '../../components/TutorChatPanel';
+import { apiFetch } from '../../utils/api';
 
 // @ts-ignore
 import Hypher from 'hypher';
@@ -389,9 +390,8 @@ export const ActiveQuizView: React.FC<
         setAdaptiveLoading(true);
 
         try {
-          const response = await fetch('/api/answer-adaptive-question', {
+          const response = await apiFetch('/api/answer-adaptive-question', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               session_id: adaptiveSessionId,
               question_number: currentQuestion.id,
@@ -444,9 +444,8 @@ export const ActiveQuizView: React.FC<
         setAdaptiveLoading(true);
 
         try {
-          const response = await fetch('/api/answer-adaptive-question-open', {
+          const response = await apiFetch('/api/answer-adaptive-question-open', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               session_id: adaptiveSessionId,
               question_number: currentQuestion.id,

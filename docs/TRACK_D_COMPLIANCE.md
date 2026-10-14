@@ -98,11 +98,10 @@
 -   Answer returns `citations: List[Citation]` containing `source_filename`, `locator`, `excerpt`, and `relevance_score`.
 -   **Offline vs Online Mode:** When `GEMINI_API_KEY` is present, Gemini generates a synthesized grounded response. When running offline (no API key), the system does not crash or fake synthesis; it provides transparent **Direct Excerpt Retrieval** prefixed with `[Offline Mode — Direct Excerpt Retrieval]` citing the exact retrieved chunk and locator.
 -   Frontend renders citation badges that display the excerpt and locator on hover/click.
-- **Tests & Results:**
 -   `eval/run_grounding_eval.py` executed across 13 benchmark test cases in offline deterministic mode:
--     - Retrieval Hit Rate: **100.0%** (13/13)
--     - Context Recall: **100.0%** (13/13)
--     - Generative model metrics (`faithfulness`, `relevancy`, `citation_correctness`): marked `null` in offline mode (honest reporting; not fabricated).
+-     - Retrieval Hit Rate: **100.0%** (9/9 answerable cases; 4 out-of-scope negative cases test refusal)
+-     - Context Recall (Proxy): **100.0%** across answerable benchmark items
+-     - Generative model metrics (`faithfulness`, `relevancy`, `citation_correctness`, `refusal_accuracy`): marked `null` in offline mode (honest reporting; not fabricated).
 -   `tests/test_track_d.py` (`test_offline_tutor_response_transparent`): Passed.
 
 ---
@@ -301,14 +300,14 @@
 - **Evidence & Results (Actual Executed Run):**
   - **Evaluation Mode:** Offline Deterministic Retrieval Only (without `GEMINI_API_KEY`).
   - **Total Test Cases:** 13 (9 answerable, 4 unanswerable).
-  - **Retrieval Hit Rate:** **100.0%** (13/13)
-  - **Context Recall:** **100.0%** (13/13)
+  - **Retrieval Hit Rate:** **100.0%** (9/9 answerable cases; 4 out-of-scope negative cases test refusal)
+  - **Context Recall (Proxy):** **100.0%** across answerable benchmark items
   - **Context Precision:** `null` (requires GEMINI_API_KEY)
   - **Citation Correctness:** `null` (requires GEMINI_API_KEY)
   - **Refusal Accuracy:** `null` (requires GEMINI_API_KEY)
   - **Avg Faithfulness (1-5):** `null` (requires GEMINI_API_KEY)
   - **Avg Relevancy (1-5):** `null` (requires GEMINI_API_KEY)
-  - *Integrity Note:* Model-dependent generative metrics are cleanly marked `null` in offline execution rather than presenting fabricated or mock scores. Deterministic retrieval hit rate and context recall are measured directly against the ground truth dataset locators.
+  - *Integrity Note:* Model-dependent generative metrics are cleanly marked `null` in offline execution rather than presenting fabricated or mock scores. Deterministic retrieval hit rate is computed exclusively on the 9 answerable queries (9/9 = 100.0%) and context recall is reported as a proxy.
 
 ---
 

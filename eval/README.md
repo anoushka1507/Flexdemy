@@ -14,13 +14,14 @@ This directory contains automated, reproducible evaluation harnesses and benchma
 
 ### 1. Grounding & Retrieval Evaluation (`run_grounding_eval.py`)
 Computes:
-- **Retrieval Hit Rate / Context Recall**: Evaluates whether the ground-truth section/locator appears in top-$k$ retrieved chunks.
+- **Retrieval Hit Rate**: Evaluates whether the ground-truth section/locator appears in top-$k$ retrieved chunks across the 9 answerable cases (9/9 = 100.0%). The 4 unanswerable cases are out-of-scope negative controls testing refusal.
+- **Context Recall (Proxy)**: Context recall is reported as a retrieval-hit-rate proxy across the benchmark's answerable items.
 - **Context Precision**: Fraction of retrieved passages judged genuinely relevant.
 - **Citation Correctness**: Verifies emitted citation locators against actual material chunks.
 - **Refusal Precision & Recall**: Tests whether out-of-scope questions are refused cleanly without hallucination.
 - **Faithfulness & Answer Relevancy**: LLM-as-judge scoring (1–5) on supported claims.
 
-*Integrity note:* When running offline without `GEMINI_API_KEY`, model-dependent metrics (`faithfulness`, `relevancy`, `context_precision`, `refusal_accuracy`) are reported as `null` rather than generating fabricated scores. Retrieval Hit Rate is computed directly from local lexical retrieval.
+*Integrity note:* When running offline without `GEMINI_API_KEY`, model-dependent metrics (`faithfulness`, `relevancy`, `context_precision`, `refusal_accuracy`) are reported as `null` rather than generating fabricated scores. Retrieval Hit Rate is computed directly from local lexical retrieval on the 9 answerable cases (9/9 = 100.0%).
 
 ### 2. Multi-Session Simulated Learner Evaluation (`simulate_students.py`)
 Simulates synthetic student agents across multiple learning sessions:

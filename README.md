@@ -942,7 +942,7 @@ Verifies BKT mathematical updates, numerical tolerance grading, comma/negative f
 ```bash
 python -m unittest tests/test_track_d.py
 ```
-*Current Result: 14/14 tests passing in 0.021s.*
+*Current Result: 21/21 tests passing in 0.03s.*
 
 ### 2. Run Grounding & Citation Evaluation Harness
 Evaluates retrieval hit rate, context precision, context recall, citation correctness, and refusal accuracy on unsupported questions:
@@ -951,8 +951,8 @@ python eval/run_grounding_eval.py
 ```
 *Current Results (Offline Mode without Gemini API Key):*
 - **Total Test Cases:** 13 (9 answerable, 4 unanswerable)
-- **Retrieval Hit Rate:** 100.0%
-- **Context Recall:** 100.0%
+- **Retrieval Hit Rate:** 100.0% (9/9 answerable cases)
+- **Context Recall (Proxy):** 100.0% across answerable benchmark items
 - **Generative Metrics (Faithfulness, Relevancy, Refusal Accuracy, Citation Correctness):** `null` (requires GEMINI_API_KEY; transparently marked offline rather than fabricated)
 
 ### 3. Run Simulated Multi-Session Student Evaluation

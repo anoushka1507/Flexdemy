@@ -71,10 +71,12 @@ from backend.supabase_client import (
     fetch_quiz_history,
     get_user_client,
     get_user_id,
+    load_cached_material,
     load_quiz_material_data,
     load_quiz_session_data,
     record_asked_question,
     record_quiz_result,
+    save_cached_material,
     save_quiz_material_data,
     save_quiz_session_data,
     upsert_mastery,
@@ -132,8 +134,35 @@ concept_extraction_cache: dict[
 
 material_chunks_cache: dict[
     str,
-    list[Chunk],
+    tuple[str, list[Chunk]],
 ] = {}
+
+# Session-level concurrency locks to prevent race conditions during answer submission
+_session_locks: dict[str, asyncio.Lock] = {}
+
+def get_session_lock(session_id: str) -> asyncio.Lock:
+    if session_id not in _session_locks:
+        _session_locks[session_id] = asyncio.Lock()
+    return _session_locks[session_id]
+
+# Rate-limiting for public AI endpoints
+_ai_rate_limits: dict[str, list[float]] = {}
+
+def check_ai_rate_limit(client_id: str, max_requests: int = 30, window_seconds: int = 60) -> None:
+    """
+    In-memory sliding-window abuse protection for AI endpoints.
+    Allows intended guest and student usage while preventing quota exhaustion.
+    """
+    import time
+    now = time.time()
+    history = _ai_rate_limits.setdefault(client_id, [])
+    history[:] = [t for t in history if now - t < window_seconds]
+    if len(history) >= max_requests:
+        raise HTTPException(
+            status_code=429,
+            detail="Rate limit exceeded on AI generation endpoint. Please wait a moment before trying again.",
+        )
+    history.append(now)
 
 
 # ============================================================
@@ -148,14 +177,25 @@ material_chunks_cache: dict[
 # behavior (matches every other persistence call in this file).
 # ============================================================
 
-async def get_session(session_id: str) -> AdaptiveSession | None:
+async def get_session(
+    session_id: str,
+    user_id: str | None = None,
+    auth_client=None,
+) -> AdaptiveSession | None:
 
     session = adaptive_sessions.get(session_id)
 
     if session is not None:
+        if session.user_id and user_id and session.user_id != user_id:
+            logger.warning("Unauthorized access to in-memory session %s by %s", session_id, user_id)
+            return None
         return session
 
-    data = await load_quiz_session_data(session_id)
+    data = await load_quiz_session_data(
+        session_id,
+        user_id=user_id,
+        auth_client=auth_client,
+    )
 
     if data is None:
         return None
@@ -166,29 +206,46 @@ async def get_session(session_id: str) -> AdaptiveSession | None:
         print("Failed to restore session from Supabase:", repr(e))
         return None
 
+    if session.user_id and user_id and session.user_id != user_id:
+        logger.warning("Unauthorized access to restored session %s by %s", session_id, user_id)
+        return None
+
     adaptive_sessions[session_id] = session
 
     return session
 
 
-async def save_session(session: AdaptiveSession) -> None:
+async def save_session(
+    session: AdaptiveSession,
+    auth_client=None,
+) -> None:
 
     adaptive_sessions[session.session_id] = session
 
     await save_quiz_session_data(
         session.session_id,
         session.model_dump(mode="json"),
+        user_id=session.user_id,
+        auth_client=auth_client,
     )
 
 
-async def get_material(session_id: str) -> dict | None:
+async def get_material(
+    session_id: str,
+    user_id: str | None = None,
+    auth_client=None,
+) -> dict | None:
 
     material = materials.get(session_id)
 
     if material is not None:
         return material
 
-    data = await load_quiz_material_data(session_id)
+    data = await load_quiz_material_data(
+        session_id,
+        user_id=user_id,
+        auth_client=auth_client,
+    )
 
     if data is None:
         return None
@@ -206,7 +263,12 @@ async def get_material(session_id: str) -> dict | None:
     return data
 
 
-async def save_material(session_id: str, material: dict) -> None:
+async def save_material(
+    session_id: str,
+    material: dict,
+    user_id: str | None = None,
+    auth_client=None,
+) -> None:
 
     materials[session_id] = material
 
@@ -221,6 +283,8 @@ async def save_material(session_id: str, material: dict) -> None:
             "content_type", "application/octet-stream"
         ),
         filename=material.get("filename", "material"),
+        user_id=user_id,
+        auth_client=auth_client,
     )
 
 
@@ -565,6 +629,8 @@ VIDEO_MIME_BY_EXT = {
 
 async def read_uploaded_material(
     file: UploadFile,
+    user_id: str | None = None,
+    sb_client=None,
 ) -> list[Chunk]:
 
     file_bytes = await file.read()
@@ -582,21 +648,8 @@ async def read_uploaded_material(
             detail="Uploaded file exceeds the maximum 100MB size limit.",
         )
 
-    import hashlib
-    content_hash = hashlib.sha256(file_bytes).hexdigest()
     raw_filename = file.filename or "uploaded_material"
     filename = raw_filename.lower()
-
-    if content_hash in material_chunks_cache:
-        # Return a copy of cached chunks with the current upload's filename preserved
-        cached = material_chunks_cache[content_hash]
-        return [
-            c.model_copy(update={
-                "source_filename": raw_filename,
-                "doc_id": f"{content_hash[:8]}_{raw_filename[:12]}",
-            })
-            for c in cached
-        ]
 
     SUPPORTED_EXTENSIONS = (
         ".pdf", ".pptx", ".txt", ".md",
@@ -624,25 +677,67 @@ async def read_uploaded_material(
         )
 
     # Magic byte integrity checks to prevent spoofed/corrupted files
-    if (filename.endswith(".pdf") or file.content_type == "application/pdf") and not file_bytes.startswith(b"%PDF-"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Corrupted or invalid PDF '{raw_filename}': file does not have a valid %PDF- header.",
-        )
+    detected_format = "pdf"
+    if filename.endswith(".pdf") or file.content_type == "application/pdf":
+        if not file_bytes.startswith(b"%PDF-"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Corrupted or invalid PDF '{raw_filename}': file does not have a valid %PDF- header.",
+            )
+        detected_format = "pdf"
+    elif filename.endswith(".pptx") or file.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+        if not file_bytes.startswith(b"PK\x03\x04"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Corrupted or invalid PPTX '{raw_filename}': file does not have a valid PK ZIP signature.",
+            )
+        detected_format = "pptx"
+    elif filename.endswith(VIDEO_EXTENSIONS) or (file.content_type or "").startswith("video/"):
+        detected_format = "video"
+    elif filename.endswith((".txt", ".md")) or (file.content_type or "").startswith("text/"):
+        detected_format = "text"
 
-    if (filename.endswith(".pptx") or file.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation") and not file_bytes.startswith(b"PK\x03\x04"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Corrupted or invalid PPTX '{raw_filename}': file does not have a valid PK ZIP signature.",
-        )
+    # Cache lookup AFTER format, size, and magic byte validation
+    import hashlib
+    content_hash = hashlib.sha256(file_bytes).hexdigest()
+
+    # 1. In-memory instance cache check
+    if content_hash in material_chunks_cache:
+        cached_format, cached_chunks = material_chunks_cache[content_hash]
+        if cached_format != detected_format:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Uploaded file '{raw_filename}' format ({detected_format}) conflicts with cached file content ({cached_format}).",
+            )
+        return [
+            c.model_copy(update={
+                "source_filename": raw_filename,
+                "doc_id": f"{content_hash[:8]}_{raw_filename[:12]}",
+                "mime_type": file.content_type or c.mime_type,
+            })
+            for c in cached_chunks
+        ]
+
+    # 2. Durable Supabase cache check (preserves extracted chunks across Vercel cold starts)
+    cached_durable = await load_cached_material(content_hash, user_id=user_id, auth_client=sb_client)
+    if cached_durable and cached_durable.get("chunks"):
+        try:
+            chunks = [Chunk.model_validate(c) for c in cached_durable["chunks"]]
+            material_chunks_cache[content_hash] = (detected_format, chunks)
+            return [
+                c.model_copy(update={
+                    "source_filename": raw_filename,
+                    "doc_id": f"{content_hash[:8]}_{raw_filename[:12]}",
+                    "mime_type": file.content_type or c.mime_type,
+                })
+                for c in chunks
+            ]
+        except Exception as e:
+            logger.warning("Failed to restore cached chunks from Supabase: %s", e)
 
     chunks: list[Chunk] = []
 
-    if (
-        filename.endswith(".txt")
-        or filename.endswith(".md")
-        or (file.content_type and file.content_type.startswith("text/"))
-    ):
+    if detected_format == "text":
         try:
             text = file_bytes.decode("utf-8")
         except UnicodeDecodeError:
@@ -651,15 +746,11 @@ async def read_uploaded_material(
         from AI_Layer.ai_core import extract_text_and_chunk
         chunks = extract_text_and_chunk(text, raw_filename)
 
-    elif filename.endswith(".pptx") or (
-        file.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    ):
+    elif detected_format == "pptx":
         from AI_Layer.ai_core import extract_slide_deck
         chunks = await extract_slide_deck(file_bytes, raw_filename)
 
-    elif filename.endswith(VIDEO_EXTENSIONS) or (
-        file.content_type or ""
-    ).startswith("video/"):
+    elif detected_format == "video":
         from AI_Layer.ai_core import extract_video
         ext = next(
             (e for e in VIDEO_EXTENSIONS if filename.endswith(e)),
@@ -685,7 +776,19 @@ async def read_uploaded_material(
         if not c.source_filename:
             c.source_filename = raw_filename
 
-    material_chunks_cache[content_hash] = chunks
+    material_chunks_cache[content_hash] = (detected_format, chunks)
+
+    # Persist chunks into durable cache asynchronously (best-effort)
+    await save_cached_material(
+        content_hash=content_hash,
+        chunks_json=[c.model_dump(mode="json") for c in chunks],
+        concept_drafts_json=[],
+        content_type=mime,
+        filename=raw_filename,
+        user_id=user_id,
+        auth_client=sb_client,
+    )
+
     return chunks
 
 
@@ -739,7 +842,12 @@ async def generate_question_api(
 @app.post("/extract-concepts")
 async def extract_concepts_api(
     file: UploadFile = File(...),
+    authorization: str | None = Header(None),
 ):
+
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+    check_ai_rate_limit(user_id or "client")
 
     from AI_Layer.ai_core import (
         extract_concepts,
@@ -747,7 +855,9 @@ async def extract_concepts_api(
 
 
     chunks = await read_uploaded_material(
-        file
+        file,
+        user_id=user_id,
+        sb_client=sb_client,
     )
 
 
@@ -805,6 +915,7 @@ async def start_adaptive_quiz(
 
     sb_client = get_user_client(authorization)
     user_id = get_user_id(authorization)
+    check_ai_rate_limit(user_id or "client")
 
     requested_types = [
         t.strip()
@@ -846,7 +957,9 @@ async def start_adaptive_quiz(
         await file.seek(0)
 
         chunks = await read_uploaded_material(
-            file
+            file,
+            user_id=user_id,
+            sb_client=sb_client,
         )
 
 
@@ -971,6 +1084,7 @@ async def start_adaptive_quiz(
 
         session = AdaptiveSession(
             session_id=session_id,
+            user_id=user_id,
             title=title,
             total_questions=question_count,
             starting_difficulty=difficulty,
@@ -997,6 +1111,8 @@ async def start_adaptive_quiz(
                 "content_type": file.content_type or "application/octet-stream",
                 "filename": file.filename or "material",
             },
+            user_id=user_id,
+            auth_client=sb_client,
         )
 
 
@@ -1017,7 +1133,7 @@ async def start_adaptive_quiz(
 
         # Save AFTER Q1 is generated so the persisted session
         # already has current_question/current_concept_label set.
-        await save_session(session)
+        await save_session(session, auth_client=sb_client)
 
 
         return {
@@ -1086,6 +1202,11 @@ async def record_answer_and_advance(
 ):
 
     # --------------------------------------------------------
+    # Determine question type for consistent in-session and persistent BKT
+    # --------------------------------------------------------
+    q_type = session.current_question.question_type if session.current_question else "mcq"
+
+    # --------------------------------------------------------
     # Update performance for the answered concept.
     # Difficulty and streak are GLOBAL to the quiz.
     # --------------------------------------------------------
@@ -1097,6 +1218,7 @@ async def record_answer_and_advance(
     state = update_concept_performance(
         state,
         was_correct,
+        question_type=q_type,
     )
 
     # --------------------------------------------------------
@@ -1174,7 +1296,6 @@ async def record_answer_and_advance(
     # own errors internally), so it's safe to run concurrently with
     # next-question generation below instead of serially blocking the
     # Gemini call behind a database round-trip first.
-    q_type = session.current_question.question_type if session.current_question else "mcq"
     mastery_task = upsert_mastery(
         sb_client,
         topic,
@@ -1218,7 +1339,9 @@ async def record_answer_and_advance(
         if extra_fields:
             response.update(extra_fields)
 
-        await save_session(session)
+        # Store in durable idempotency log
+        session.answered_results[request_question_number] = response
+        await save_session(session, auth_client=sb_client)
 
         return response
 
@@ -1318,7 +1441,9 @@ async def record_answer_and_advance(
     if extra_fields:
         response.update(extra_fields)
 
-    await save_session(session)
+    # Store in durable idempotency log
+    session.answered_results[request_question_number] = response
+    await save_session(session, auth_client=sb_client)
 
     return response
 
@@ -1336,112 +1461,98 @@ async def answer_adaptive_question(
     sb_client = get_user_client(authorization)
     user_id = get_user_id(authorization)
 
-    session = await get_session(
-        request.session_id
-    )
-
-
-    if session is None:
-
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "Adaptive quiz session not found."
-            ),
+    async with get_session_lock(request.session_id):
+        session = await get_session(
+            request.session_id,
+            user_id=user_id,
+            auth_client=sb_client,
         )
 
+        if session is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Adaptive quiz session not found.",
+            )
 
-    # --------------------------------------------------------
-    # Make sure there is an active question.
-    # --------------------------------------------------------
+        if session.user_id and user_id and session.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to submit answers for this quiz session.",
+            )
 
-    if (
-        session.current_question is None
-        or session.current_concept_label is None
-        or session.current_question_number is None
-    ):
+        # ----------------------------------------------------
+        # Atomic idempotency: if question already answered, return cached result
+        # ----------------------------------------------------
+        if request.question_number in session.answered_results:
+            return session.answered_results[request.question_number]
 
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "There is no active question."
-            ),
+        # ----------------------------------------------------
+        # Make sure there is an active question.
+        # ----------------------------------------------------
+        if (
+            session.current_question is None
+            or session.current_concept_label is None
+            or session.current_question_number is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="There is no active question.",
+            )
+
+        # ----------------------------------------------------
+        # Prevent out-of-order submissions.
+        # ----------------------------------------------------
+        if (
+            request.question_number
+            != session.current_question_number
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Question number does not match the active question.",
+            )
+
+        question = session.current_question
+
+        # ----------------------------------------------------
+        # Validate answer index.
+        # ----------------------------------------------------
+        if not (
+            0
+            <= request.selected_option_index
+            < len(question.options)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid answer option.",
+            )
+
+        # ----------------------------------------------------
+        # Backend determines correctness.
+        # ----------------------------------------------------
+        selected_option = question.options[
+            request.selected_option_index
+        ]
+
+        was_correct = selected_option.is_correct
+        concept_label = session.current_concept_label
+
+        return await record_answer_and_advance(
+            session,
+            request.question_number,
+            concept_label,
+            was_correct,
+            sb_client,
+            extra_fields={
+                "explanation": question.explanation or (
+                    "That is the correct answer! Well done."
+                    if was_correct
+                    else "Review the cited source below to master this concept."
+                ),
+                "misconception": selected_option.misconception_tag,
+                "source_locator": question.source_locator,
+            },
+            user_id=user_id,
         )
-
-
-    # --------------------------------------------------------
-    # Prevent duplicate submissions.
-    # --------------------------------------------------------
-
-    if (
-        request.question_number
-        != session.current_question_number
-    ):
-
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Question number does not match "
-                "the active question."
-            ),
-        )
-
-
-    question = session.current_question
-
-
-    # --------------------------------------------------------
-    # Validate answer index.
-    # --------------------------------------------------------
-
-    if not (
-        0
-        <= request.selected_option_index
-        < len(question.options)
-    ):
-
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid answer option.",
-        )
-
-
-    # --------------------------------------------------------
-    # Backend determines correctness.
-    # --------------------------------------------------------
-
-    selected_option = question.options[
-        request.selected_option_index
-    ]
-
-
-    was_correct = (
-        selected_option.is_correct
-    )
-
-
-    concept_label = (
-        session.current_concept_label
-    )
-
-
-    return await record_answer_and_advance(
-        session,
-        request.question_number,
-        concept_label,
-        was_correct,
-        sb_client,
-        extra_fields={
-            "explanation": question.explanation or (
-                "That is the correct answer! Well done."
-                if was_correct
-                else "Review the cited source below to master this concept."
-            ),
-            "misconception": selected_option.misconception_tag,
-            "source_locator": question.source_locator,
-        },
-        user_id=user_id,
-    )
 
 
 # ============================================================
@@ -1463,65 +1574,80 @@ async def answer_adaptive_question_open(
     sb_client = get_user_client(authorization)
     user_id = get_user_id(authorization)
 
-    session = await get_session(
-        request.session_id
-    )
-
-    if session is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Adaptive quiz session not found.",
+    async with get_session_lock(request.session_id):
+        session = await get_session(
+            request.session_id,
+            user_id=user_id,
+            auth_client=sb_client,
         )
 
-    if (
-        session.current_question is None
-        or session.current_concept_label is None
-        or session.current_question_number is None
-    ):
-        raise HTTPException(
-            status_code=400,
-            detail="There is no active question.",
+        if session is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Adaptive quiz session not found.",
+            )
+
+        if session.user_id and user_id and session.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You are not authorized to submit answers for this quiz session.",
+            )
+
+        # ----------------------------------------------------
+        # Atomic idempotency: if question already answered, return cached result
+        # ----------------------------------------------------
+        if request.question_number in session.answered_results:
+            return session.answered_results[request.question_number]
+
+        if (
+            session.current_question is None
+            or session.current_concept_label is None
+            or session.current_question_number is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="There is no active question.",
+            )
+
+        if request.question_number != session.current_question_number:
+            raise HTTPException(
+                status_code=400,
+                detail="Question number does not match the active question.",
+            )
+
+        question = session.current_question
+
+        if question.question_type == "mcq":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "This question expects a multiple-choice answer — "
+                    "use /answer-adaptive-question instead."
+                ),
+            )
+
+        from AI_Layer.ai_core import verify_answer
+
+        verification = await verify_answer(
+            question,
+            request.student_answer,
         )
 
-    if request.question_number != session.current_question_number:
-        raise HTTPException(
-            status_code=400,
-            detail="Question number does not match the active question.",
+        concept_label = session.current_concept_label
+
+        return await record_answer_and_advance(
+            session,
+            request.question_number,
+            concept_label,
+            verification.is_correct,
+            sb_client,
+            extra_fields={
+                "explanation": verification.feedback,
+                "feedback": verification.feedback,
+                "source_locator": verification.source_locator,
+            },
+            user_id=user_id,
         )
-
-    question = session.current_question
-
-    if question.question_type == "mcq":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "This question expects a multiple-choice answer — "
-                "use /answer-adaptive-question instead."
-            ),
-        )
-
-    from AI_Layer.ai_core import verify_answer
-
-    verification = await verify_answer(
-        question,
-        request.student_answer,
-    )
-
-    concept_label = session.current_concept_label
-
-    return await record_answer_and_advance(
-        session,
-        request.question_number,
-        concept_label,
-        verification.is_correct,
-        sb_client,
-        extra_fields={
-            "explanation": verification.feedback,
-            "feedback": verification.feedback,
-            "source_locator": verification.source_locator,
-        },
-        user_id=user_id,
-    )
 
 
 # ============================================================
@@ -1543,12 +1669,20 @@ async def grounded_chat_api(
     authorization: str | None = Header(None),
 ):
 
+    chat_user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+    check_ai_rate_limit(chat_user_id or "client")
+
     from AI_Layer.ai_core import (
         answer_grounded_question,
         embed_texts,
     )
 
-    material = await get_material(request.session_id)
+    material = await get_material(
+        request.session_id,
+        user_id=chat_user_id,
+        auth_client=sb_client,
+    )
 
     if material is None:
         raise HTTPException(
@@ -1562,7 +1696,12 @@ async def grounded_chat_api(
         material["embeddings"] = await embed_texts(
             [chunk.text for chunk in chunks]
         )
-        await save_material(request.session_id, material)
+        await save_material(
+            request.session_id,
+            material,
+            user_id=chat_user_id,
+            auth_client=sb_client,
+        )
 
     response = await answer_grounded_question(
         chunks,
@@ -1582,7 +1721,11 @@ async def grounded_chat_api(
 
     if response.is_grounded and response.citations:
 
-        session = await get_session(request.session_id)
+        session = await get_session(
+            request.session_id,
+            user_id=chat_user_id,
+            auth_client=sb_client,
+        )
 
         if session is not None:
 
@@ -1600,9 +1743,6 @@ async def grounded_chat_api(
             )
 
             if topic:
-
-                sb_client = get_user_client(authorization)
-                chat_user_id = get_user_id(authorization)
 
                 await upsert_mastery(
                     sb_client,
@@ -1626,14 +1766,25 @@ class FlashcardRequest(BaseModel):
 
 
 @app.post("/generate-flashcards")
-async def generate_flashcards_api(request: FlashcardRequest):
+async def generate_flashcards_api(
+    request: FlashcardRequest,
+    authorization: str | None = Header(None),
+):
+
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+    check_ai_rate_limit(user_id or "client")
 
     from AI_Layer.ai_core import (
         generate_flashcards,
         embed_texts,
     )
 
-    material = await get_material(request.session_id)
+    material = await get_material(
+        request.session_id,
+        user_id=user_id,
+        auth_client=sb_client,
+    )
 
     if material is None:
         raise HTTPException(
@@ -1647,9 +1798,18 @@ async def generate_flashcards_api(request: FlashcardRequest):
         material["embeddings"] = await embed_texts(
             [chunk.text for chunk in chunks]
         )
-        await save_material(request.session_id, material)
+        await save_material(
+            request.session_id,
+            material,
+            user_id=user_id,
+            auth_client=sb_client,
+        )
 
-    session = await get_session(request.session_id)
+    session = await get_session(
+        request.session_id,
+        user_id=user_id,
+        auth_client=sb_client,
+    )
     concepts = session.concepts if session else None
 
     count = max(1, min(request.count, 15))
@@ -1682,9 +1842,19 @@ async def generate_flashcards_api(request: FlashcardRequest):
 # ============================================================
 
 @app.get("/materials/{session_id}/file")
-async def material_file_api(session_id: str):
+async def material_file_api(
+    session_id: str,
+    authorization: str | None = Header(None),
+):
 
-    material = await get_material(session_id)
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+
+    material = await get_material(
+        session_id,
+        user_id=user_id,
+        auth_client=sb_client,
+    )
 
     if material is None or not material.get("raw_bytes"):
         raise HTTPException(

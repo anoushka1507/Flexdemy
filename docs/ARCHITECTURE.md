@@ -30,22 +30,21 @@ AI LAYER (AI_Layer/ai_core.py)
 GOOGLE GEMINI (gemini-3.1-flash-lite, gemini-embedding-001)
 
 SUPABASE
-  - Auth (existing, frontend-managed)
-  - Postgres: topic_mastery, asked_questions (Track D additions, RLS-scoped per user)
+  - Auth: JWT token verification and frontend session lifecycle
+  - Postgres:
+    - topic_mastery: BKT mastery scores and observation history, scoped via RLS (auth.uid() = user_id)
+    - asked_questions: cross-session question deduplication log, scoped via RLS
+    - quiz_sessions: durable quiz session and active question state, scoped via RLS, surviving Vercel cold starts
+    - material_cache: content-hash chunk cache, preventing duplicate multimodal ingestion across instances
+    - quiz_history: historical assessment scores and topic breakdown metrics
 ```
 
-**Where state lives, and why:** adaptive quiz sessions and ingested material
-chunks live in an in-memory dict on the FastAPI process
-(`backend/main.py:adaptive_sessions`, `backend/main.py:materials`). This
-matches the pre-existing architecture (the original adaptive-quiz endpoints
-already worked this way) and is appropriate for a single-process hackathon
-deployment. It means state is lost on server restart and does not scale
-horizontally — a real limitation if this were a production system, flagged
-here rather than hidden.
-
-The only *persisted* state is per-user, cross-session data that genuinely
-needs to survive restarts and be shared across devices: topic mastery and
-the asked-question log. Those live in Supabase.
+**Where state lives, and why:**
+Adaptive quiz sessions and extracted material chunks utilize a **cache-aside** design:
+1. Fast in-process memory caches (`adaptive_sessions`, `materials`, `material_chunks_cache`) provide low latency on warm serverless instances.
+2. Durable Supabase tables (`quiz_sessions`, `material_cache`) back the system so that request routing across different Vercel serverless instances or cold starts preserves in-progress quizzes and avoids re-running expensive Gemini extraction pipelines.
+3. Server-side credentials (`SUPABASE_SERVICE_ROLE_KEY`) remain strictly confidential on the backend and are never bundled into client-side Vite variables.
+4. User-scoped RLS policies (`auth.uid() = user_id`) ensure students can only view or modify their own sessions, materials, and mastery profiles. Anonymous access to session tables is completely revoked.
 
 ## 2. Source Grounding
 
@@ -209,8 +208,8 @@ The evaluation system tests the actual application against known ground truth ou
 Tested against a multi-page Software Engineering curriculum corpus (`eval/material.txt` and `eval/test_set.json`) with known ground truth source locators and explicit negative/unanswerable test items:
 - **Evaluation Mode:** Offline Deterministic Retrieval Only (without `GEMINI_API_KEY`).
 - **Total Test Cases:** 13 (9 answerable, 4 unanswerable).
-- **Retrieval Hit Rate:** **100.0%** (13/13 test cases).
-- **Context Recall:** **100.0%** (13/13 test cases).
+- **Retrieval Hit Rate:** **100.0%** (9/9 answerable test cases; 4 out-of-scope negative cases test refusal).
+- **Context Recall (Proxy):** **100.0%** across answerable benchmark items.
 - **Generative Metrics (Faithfulness, Relevancy, Citation Correctness, Refusal Accuracy):** `null` (requires GEMINI_API_KEY; explicitly reported as `null` rather than fabricated when running offline).
 
 ### 5.2 Multi-Profile Simulated Learner Evaluation (`eval/simulate_students.py`)

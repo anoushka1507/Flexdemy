@@ -1632,22 +1632,49 @@ async def answer_grounded_question(
     )
 
     answer_text = (response.text or "").strip()
-
-    # Filter citations to chunks actually cited or directly supporting the claims
     answer_lower = answer_text.lower()
+
+    # Detect explicit model refusal when excerpts do not cover the question
+    REFUSAL_TRIGGERS = (
+        "cannot be answered from the provided",
+        "can't find anything in your uploaded",
+        "the provided text does not contain",
+        "not mentioned in the provided",
+        "not covered in the provided",
+        "the provided excerpts do not mention",
+        "the excerpts do not provide",
+        "does not mention this",
+        "[unsupported_by_material]",
+    )
+
+    if any(trigger in answer_lower for trigger in REFUSAL_TRIGGERS):
+        return GroundedChatResponse(
+            answer=answer_text,
+            is_grounded=False,
+            citations=[],
+        )
+
+    # Strictly filter citations to chunks whose source locator is explicitly cited
+    # Never attach citations solely based on high retrieval similarity
     used_chunks = []
     for chunk, score in top_matches:
         loc_str = chunk.locator.lower()
         if (
-            loc_str in answer_lower
-            or f"chunk {chunk.chunk_index}" in answer_lower
-            or f"[{chunk.locator}]" in answer_text
-            or score >= 0.70
+            f"[source: {loc_str}]" in answer_lower
+            or f"[{loc_str}]" in answer_lower
+            or f"source: {loc_str}" in answer_lower
+            or loc_str in answer_lower
+            or (chunk.source_filename and chunk.source_filename.lower() in answer_lower)
         ):
             used_chunks.append((chunk, score))
 
     if not used_chunks:
-        used_chunks = top_matches[:2]
+        # Model generated text without citing or grounding in the provided chunks
+        return GroundedChatResponse(
+            answer=answer_text,
+            is_grounded=False,
+            citations=[],
+        )
 
     citations = [
         Citation(

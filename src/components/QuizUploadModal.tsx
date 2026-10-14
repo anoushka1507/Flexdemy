@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Quiz, AdaptiveQuizLaunch } from '../types';
 import { supabase } from '../supabaseClient';
+import { apiFetch } from '../utils/api';
 
 const QUESTION_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'mcq', label: 'Multiple Choice' },
@@ -97,7 +98,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const response = await fetch('/api/extract-concepts', {
+      const response = await apiFetch('/api/extract-concepts', {
         method: 'POST',
         body: formData,
       });
@@ -156,16 +157,10 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
     const difficultyValue = difficulty.toLowerCase();
 
-    const { data: sessionData } = await supabase.auth.getSession();
-    const accessToken = sessionData.session?.access_token;
-
-    const response = await fetch(
+    const response = await apiFetch(
       `/api/start-adaptive-quiz?difficulty=${difficultyValue}&question_count=${questionCount}`,
       {
         method: 'POST',
-        headers: accessToken
-          ? { Authorization: `Bearer ${accessToken}` }
-          : undefined,
         body: formData,
       }
     );

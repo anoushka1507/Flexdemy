@@ -11,6 +11,7 @@ import {
 } from './types';
 
 import { supabase } from './supabaseClient';
+import { apiFetch } from './utils/api';
 
 import {
   INITIAL_USER_PROFILE,
@@ -119,14 +120,8 @@ export default function App() {
     let mounted = true;
 
     const loadHistory = async () => {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-      if (!accessToken) return;
-
       try {
-        const response = await fetch('/api/quiz-history', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        const response = await apiFetch('/api/quiz-history');
 
         if (!response.ok) {
           console.error(
@@ -281,21 +276,8 @@ export default function App() {
     // fire-and-forget, doesn't block the UI update below.
     (async () => {
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData.session?.access_token;
-        if (!accessToken) {
-          console.warn(
-            'Quiz result not saved: no active session (guest mode?).'
-          );
-          return;
-        }
-
-        const saveResponse = await fetch('/api/record-quiz-result', {
+        const saveResponse = await apiFetch('/api/record-quiz-result', {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${accessToken}`,
-          },
           body: JSON.stringify({
             quiz_id: result.quizId,
             quiz_title: result.quizTitle,
@@ -373,14 +355,8 @@ export default function App() {
   // nothing. Fetch the most recent persisted entry and reconstruct
   // enough of a QuizResult to make Insights/flashcards work on it.
   const handleOpenQuizResult = async (quizId?: string) => {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const accessToken = sessionData.session?.access_token;
-    if (!accessToken) return;
-
     try {
-      const response = await fetch('/api/quiz-history', {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
+      const response = await apiFetch('/api/quiz-history');
       if (!response.ok) return;
 
       const data = await response.json();

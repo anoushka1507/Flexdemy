@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
+import { apiFetch } from '../utils/api';
 
 interface ConceptNode {
   label: string;
@@ -39,13 +40,7 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
     let mounted = true;
     const fetchMastery = async () => {
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) return;
-
-        const res = await fetch('/api/mastery', {
-          headers: { Authorization: `Bearer ${token}` },
-        });
+        const res = await apiFetch('/api/mastery');
         if (res.ok) {
           const data = await res.json();
           const scores: Record<string, number> = {};
@@ -160,7 +155,7 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
       const formData = new FormData();
       formData.append('file', selectedFile);
 
-      const response = await fetch('/api/extract-concepts', {
+      const response = await apiFetch('/api/extract-concepts', {
         method: 'POST',
         body: formData,
       });

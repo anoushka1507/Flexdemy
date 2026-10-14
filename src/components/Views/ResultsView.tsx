@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Quiz, QuizResult, ViewMode } from '../../types';
+import { apiFetch } from '../../utils/api';
 
 const isAiQuestion = (q: { backendQuestion?: Record<string, unknown> }) =>
   Boolean(q.backendQuestion);
@@ -59,9 +60,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     setFlashcardsError((prev) => ({ ...prev, [topic]: '' }));
 
     try {
-      const response = await fetch('/api/generate-flashcards', {
+      const response = await apiFetch('/api/generate-flashcards', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, topic, count: 5 }),
       });
 
@@ -109,9 +109,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     setExplanationError((prev) => ({ ...prev, [q.id]: '' }));
 
     try {
-      const response = await fetch('/api/explain-answer', {
+      const response = await apiFetch('/api/explain-answer', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question: q.backendQuestion,
           selected_option_index: selectedOptionIndex,
@@ -161,9 +160,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
         .slice(0, 3)
         .map((t) => t.topicName);
 
-      const response = await fetch('/api/quiz-summary', {
+      const response = await apiFetch('/api/quiz-summary', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           report_data: {
             concepts,

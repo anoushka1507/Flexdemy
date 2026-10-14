@@ -11,18 +11,41 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 SUPABASE_URL = os.getenv("VITE_SUPABASE_URL") or os.getenv("SUPABASE_URL")
-SUPABASE_ANON_KEY = (
-    os.getenv("VITE_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY")
+SUPABASE_SERVICE_ROLE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SERVICE_ROLE_KEY")
 )
+
+
+def get_service_role_client() -> Client | None:
+    """
+    Administrative client using server-side service-role key.
+    Bypasses RLS to persist quiz sessions and materials across Vercel cold starts safely.
+    NEVER exposed to frontend/browser code.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return None
+
+    return create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+
+
+def get_backend_persistence_client(auth_client: Client | None = None) -> Client | None:
+    """
+    Returns the secure client for server-side persistence:
+    1. Service-role client if configured (preferred on backend server).
+    2. User-scoped authenticated client if request has valid user JWT.
+    3. None if guest without server service-role key (graceful in-memory fallback).
+    """
+    svc = get_service_role_client()
+    if svc is not None:
+        return svc
+    return auth_client
 
 
 def get_anon_client() -> Client | None:
     """
-    Unscoped client (no user JWT) for state that isn't tied to a
-    logged-in user — quiz sessions are addressed purely by their
-    session_id, same as the in-memory dict they replace.
+    DEPRECATED: Unscoped anon client. Kept only for read-only public resources.
+    Never used for sensitive quiz_sessions or material tables.
     """
-
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return None
 
@@ -33,10 +56,8 @@ def get_user_client(authorization_header: str | None) -> Client | None:
     """
     Build a Supabase client scoped to the requesting user via their
     session JWT, so Row Level Security enforces per-user access.
-    Returns None if Supabase isn't configured or no token was given —
-    callers must treat persistence as best-effort in that case.
+    Returns None if Supabase isn't configured, token is missing, or expired.
     """
-
     if not SUPABASE_URL or not SUPABASE_ANON_KEY:
         return None
 
@@ -46,42 +67,48 @@ def get_user_client(authorization_header: str | None) -> Client | None:
         return None
 
     token = authorization_header.removeprefix("Bearer ").strip()
-
     if not token:
+        return None
+
+    # Check expiration before building client
+    uid = get_user_id(authorization_header)
+    if uid is None:
         return None
 
     client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
     client.postgrest.auth(token)
-
     return client
 
 
 def get_user_id(authorization_header: str | None) -> str | None:
     """
-    Extract the user id (JWT 'sub' claim) from the session token so
-    writes can set user_id explicitly — RLS's WITH CHECK validates
-    it, but does not fill it in for us, and the not-null columns on
-    topic_mastery/asked_questions reject an insert that omits it.
-    Decoded locally (no signature check) purely to get the id to
-    write; RLS at the database is still the real security boundary.
+    Extract the user id (JWT 'sub' claim) from the session token.
+    Validates expiration claim ('exp') so expired tokens are not trusted.
     """
-
     if not authorization_header or not authorization_header.startswith(
         "Bearer "
     ):
         return None
 
     token = authorization_header.removeprefix("Bearer ").strip()
+    if not token:
+        return None
 
     try:
         import base64
         import json
+        import time
 
         payload_b64 = token.split(".")[1]
         padding = "=" * (-len(payload_b64) % 4)
         payload = json.loads(
             base64.urlsafe_b64decode(payload_b64 + padding)
         )
+
+        exp = payload.get("exp")
+        if exp and exp < time.time():
+            logger.warning("get_user_id: Token expired at %s (now %s)", exp, time.time())
+            return None
 
         return payload.get("sub")
 
@@ -253,19 +280,24 @@ async def record_asked_question(
 async def save_quiz_session_data(
     session_id: str,
     session_json: dict,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
 ) -> None:
-
-    client = get_anon_client()
-
+    client = get_backend_persistence_client(auth_client)
     if client is None:
         return
 
     try:
+        payload = {
+            "session_id": session_id,
+            "session_data": session_json,
+            "updated_at": "now()",
+        }
+        if user_id:
+            payload["user_id"] = user_id
+
         client.table("quiz_sessions").upsert(
-            {
-                "session_id": session_id,
-                "session_data": session_json,
-            },
+            payload,
             on_conflict="session_id",
         ).execute()
 
@@ -273,21 +305,30 @@ async def save_quiz_session_data(
         logger.warning("save_quiz_session_data failed: %s", e)
 
 
-async def load_quiz_session_data(session_id: str) -> dict | None:
-
-    client = get_anon_client()
-
+async def load_quiz_session_data(
+    session_id: str,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
+) -> dict | None:
+    client = get_backend_persistence_client(auth_client)
     if client is None:
         return None
 
     try:
         result = client.table("quiz_sessions").select(
-            "session_data"
+            "session_data, user_id"
         ).eq("session_id", session_id).limit(1).execute()
 
         rows = result.data or []
 
         if not rows or rows[0].get("session_data") is None:
+            return None
+
+        row = rows[0]
+        # Authorization check: If row is owned by a specific user, verify identity
+        session_owner = row.get("user_id")
+        if session_owner and user_id and session_owner != user_id:
+            logger.warning("Unauthorized attempt to load session %s by user %s", session_id, user_id)
             return None
 
         return rows[0]["session_data"]
@@ -304,10 +345,10 @@ async def save_quiz_material_data(
     raw_bytes: bytes | None,
     content_type: str,
     filename: str,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
 ) -> None:
-
-    client = get_anon_client()
-
+    client = get_backend_persistence_client(auth_client)
     if client is None:
         return
 
@@ -320,7 +361,11 @@ async def save_quiz_material_data(
             "material_embeddings": embeddings_json,
             "material_content_type": content_type,
             "material_filename": filename,
+            "updated_at": "now()",
         }
+
+        if user_id:
+            payload["user_id"] = user_id
 
         if raw_bytes is not None:
             payload["material_raw_file_b64"] = base64.b64encode(
@@ -336,10 +381,12 @@ async def save_quiz_material_data(
         logger.warning("save_quiz_material_data failed: %s", e)
 
 
-async def load_quiz_material_data(session_id: str) -> dict | None:
-
-    client = get_anon_client()
-
+async def load_quiz_material_data(
+    session_id: str,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
+) -> dict | None:
+    client = get_backend_persistence_client(auth_client)
     if client is None:
         return None
 
@@ -347,7 +394,7 @@ async def load_quiz_material_data(session_id: str) -> dict | None:
         result = client.table("quiz_sessions").select(
             "material_chunks, material_embeddings, "
             "material_raw_file_b64, material_content_type, "
-            "material_filename"
+            "material_filename, user_id"
         ).eq("session_id", session_id).limit(1).execute()
 
         rows = result.data or []
@@ -356,6 +403,10 @@ async def load_quiz_material_data(session_id: str) -> dict | None:
             return None
 
         row = rows[0]
+        session_owner = row.get("user_id")
+        if session_owner and user_id and session_owner != user_id:
+            logger.warning("Unauthorized attempt to load material for session %s", session_id)
+            return None
 
         import base64
 
@@ -378,6 +429,76 @@ async def load_quiz_material_data(session_id: str) -> dict | None:
 
     except Exception as e:
         logger.warning("load_quiz_material_data failed: %s", e)
+        return None
+
+
+# ============================================================
+# DURABLE MATERIAL & CONCEPT CACHE (prevents duplicate processing on Vercel)
+# ============================================================
+
+async def save_cached_material(
+    content_hash: str,
+    chunks_json: list[dict],
+    concept_drafts_json: list[dict],
+    content_type: str,
+    filename: str,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
+) -> None:
+    client = get_backend_persistence_client(auth_client)
+    if client is None:
+        return
+
+    try:
+        payload = {
+            "content_hash": content_hash,
+            "material_chunks": chunks_json,
+            "concept_drafts": concept_drafts_json,
+            "material_content_type": content_type,
+            "material_filename": filename,
+        }
+        if user_id:
+            payload["user_id"] = user_id
+
+        client.table("material_cache").upsert(
+            payload,
+            on_conflict="content_hash",
+        ).execute()
+    except Exception as e:
+        logger.warning("save_cached_material failed: %s", e)
+
+
+async def load_cached_material(
+    content_hash: str,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
+) -> dict | None:
+    client = get_backend_persistence_client(auth_client)
+    if client is None:
+        return None
+
+    try:
+        result = client.table("material_cache").select(
+            "material_chunks, concept_drafts, material_content_type, material_filename, user_id"
+        ).eq("content_hash", content_hash).limit(1).execute()
+
+        rows = result.data or []
+        if not rows:
+            return None
+
+        row = rows[0]
+        owner = row.get("user_id")
+        if owner and user_id and owner != user_id:
+            return None
+
+        return {
+            "chunks": row.get("material_chunks") or [],
+            "concept_drafts": row.get("concept_drafts") or [],
+            "content_type": row.get("material_content_type") or "application/octet-stream",
+            "filename": row.get("material_filename") or "material",
+        }
+    except Exception as e:
+        logger.warning("load_cached_material failed: %s", e)
         return None
 
 

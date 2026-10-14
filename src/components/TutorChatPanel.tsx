@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GroundedChatMessage, Citation } from '../types';
+import { apiFetch } from '../utils/api';
 
 interface TutorChatPanelProps {
   isOpen: boolean;
@@ -124,9 +125,8 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
     setLoading(true);
 
     try {
-      const response = await fetch('/api/grounded-chat', {
+      const response = await apiFetch('/api/grounded-chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           session_id: sessionId,
           message: question,

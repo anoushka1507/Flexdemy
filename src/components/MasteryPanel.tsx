@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
+import { apiFetch } from '../utils/api';
 
 interface TopicMastery {
   mastery_score: number;
@@ -31,20 +32,7 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
       setError('');
 
       try {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const accessToken = sessionData.session?.access_token;
-
-        if (!accessToken) {
-          if (mounted) {
-            setError('Sign in to see your mastery profile.');
-            setLoading(false);
-          }
-          return;
-        }
-
-        const response = await fetch('/api/mastery', {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
+        const response = await apiFetch('/api/mastery', { requireAuth: true });
 
         if (!response.ok) {
           const text = await response.text();
@@ -85,14 +73,8 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
   const handleGenerateSchedule = async () => {
     setScheduleLoading(true);
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData.session?.access_token;
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
-
-      const res = await fetch('/api/study-schedule', {
+      const res = await apiFetch('/api/study-schedule', {
         method: 'POST',
-        headers,
         body: JSON.stringify({
           days_until_exam: examDays,
           daily_minutes: dailyMinutes,

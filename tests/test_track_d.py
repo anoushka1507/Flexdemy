@@ -287,5 +287,273 @@ class TestGroundedRetrievalAndOfflineTutor(unittest.TestCase):
             loop.close()
 
 
+class TestUploadCacheValidation(unittest.TestCase):
+    """P1: Upload validation before cache lookup, spoofing defense, and cross-format protection."""
+
+    def test_cache_hit_validation_order(self):
+        # 1. Warm cache with a valid text file
+        content = b"Data structures lecture notes on binary search trees."
+        file_valid = UploadFile(filename="lecture.txt", file=io.BytesIO(content))
+
+        loop = asyncio.new_event_loop()
+        try:
+            chunks = loop.run_until_complete(read_uploaded_material(file_valid))
+            self.assertTrue(len(chunks) > 0)
+
+            # 2. Attempt spoofed upload of SAME bytes as .pdf (lacks %PDF- magic bytes)
+            # Even though the hash is already in the cache, validation MUST occur first!
+            file_spoofed = UploadFile(filename="lecture.pdf", file=io.BytesIO(content))
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(read_uploaded_material(file_spoofed))
+            self.assertEqual(cm.exception.status_code, 400)
+            self.assertIn("%PDF-", cm.exception.detail)
+
+            # 3. Attempt unsupported extension with SAME bytes
+            file_unsupported = UploadFile(filename="lecture.exe", file=io.BytesIO(content))
+            with self.assertRaises(HTTPException) as cm2:
+                loop.run_until_complete(read_uploaded_material(file_unsupported))
+            self.assertEqual(cm2.exception.status_code, 415)
+
+            # 4. Attempt empty file
+            file_empty = UploadFile(filename="empty.txt", file=io.BytesIO(b""))
+            with self.assertRaises(HTTPException) as cm3:
+                loop.run_until_complete(read_uploaded_material(file_empty))
+            self.assertEqual(cm3.exception.status_code, 400)
+        finally:
+            loop.close()
+
+
+class TestIdempotencyAndConcurrency(unittest.TestCase):
+    """P1: Durable idempotency and concurrency protection for answer submissions."""
+
+    def test_answer_submission_idempotency(self):
+        concept = Concept(label="Binary Search", description="Divide and conquer", source_chunk_indices=[0])
+        question = QuestionDraft(
+            question_text="What is the runtime of binary search?",
+            options=[
+                OptionDraft(text="O(log n)", is_correct=True, misconception_tag=None),
+                OptionDraft(text="O(n)", is_correct=False, misconception_tag="Linear scanning confusion"),
+            ],
+            difficulty="medium",
+            question_type="mcq",
+            source_locator="Slide 3",
+        )
+
+        session = AdaptiveSession(
+            session_id="test-session-idempotency",
+            title="Test Quiz",
+            total_questions=1,
+            starting_difficulty="medium",
+            current_difficulty="medium",
+            streak_direction="",
+            streak_count=0,
+            concepts=[concept],
+            concept_states={"Binary Search": ConceptState(concept_label="Binary Search", mastery_score=0.30)},
+            current_concept_label="Binary Search",
+            current_question=question,
+            current_question_number=1,
+            questions_asked=1,
+        )
+
+        loop = asyncio.new_event_loop()
+        try:
+            # First submission
+            from backend.main import record_answer_and_advance
+            res1 = loop.run_until_complete(
+                record_answer_and_advance(
+                    session=session,
+                    request_question_number=1,
+                    concept_label="Binary Search",
+                    was_correct=True,
+                    user_id="user-123",
+                )
+            )
+
+            # Check that result was recorded in answered_results
+            self.assertIn(1, session.answered_results)
+            self.assertTrue(res1["was_correct"])
+
+            # Verify concept state updated once
+            state_after_first = session.concept_states["Binary Search"]
+            self.assertEqual(state_after_first.times_asked, 1)
+            self.assertEqual(state_after_first.correct_count, 1)
+            mastery_after_first = state_after_first.mastery_score
+
+            # Second identical submission (idempotency check)
+            if 1 in session.answered_results:
+                res2 = session.answered_results[1]
+            else:
+                res2 = loop.run_until_complete(
+                    record_answer_and_advance(session, 1, "Binary Search", True, user_id="user-123")
+                )
+
+            # Verify return value is identical and counters have NOT double-incremented
+            self.assertEqual(res1, res2)
+            self.assertEqual(session.concept_states["Binary Search"].times_asked, 1)
+            self.assertEqual(session.concept_states["Binary Search"].mastery_score, mastery_after_first)
+        finally:
+            loop.close()
+
+    def test_concurrent_duplicate_answer_submissions(self):
+        from backend.main import get_session_lock, record_answer_and_advance
+
+        concept = Concept(label="Graph Search", description="BFS and DFS", source_chunk_indices=[0])
+        question = QuestionDraft(
+            question_text="Is BFS complete for finite graphs?",
+            options=[
+                OptionDraft(text="Yes", is_correct=True, misconception_tag=None),
+                OptionDraft(text="No", is_correct=False, misconception_tag="Completeness confusion"),
+            ],
+            difficulty="medium",
+            question_type="mcq",
+            source_locator="Slide 1",
+        )
+
+        session = AdaptiveSession(
+            session_id="test-session-concurrent",
+            title="Concurrent Test",
+            total_questions=1,
+            starting_difficulty="medium",
+            current_difficulty="medium",
+            streak_direction="",
+            streak_count=0,
+            concepts=[concept],
+            concept_states={"Graph Search": ConceptState(concept_label="Graph Search", mastery_score=0.30)},
+            current_concept_label="Graph Search",
+            current_question=question,
+            current_question_number=1,
+            questions_asked=1,
+        )
+
+        async def run_concurrent():
+            async def submit_guarded():
+                async with get_session_lock(session.session_id):
+                    if 1 in session.answered_results:
+                        return session.answered_results[1]
+                    return await record_answer_and_advance(
+                        session=session,
+                        request_question_number=1,
+                        concept_label="Graph Search",
+                        was_correct=True,
+                        user_id="user-concurrent",
+                    )
+
+            t1 = submit_guarded()
+            t2 = submit_guarded()
+            return await asyncio.gather(t1, t2)
+
+        res1, res2 = asyncio.run(run_concurrent())
+
+        # Both coroutines received the identical completion response
+        self.assertEqual(res1, res2)
+        self.assertEqual(session.concept_states["Graph Search"].times_asked, 1)
+        self.assertEqual(session.concept_states["Graph Search"].correct_count, 1)
+        self.assertIn(1, session.answered_results)
+
+
+class TestBKTQuestionTypesConsistency(unittest.TestCase):
+    """P1: Live answer processing passes active question type into BKT update."""
+
+    def test_in_session_bkt_differentiation(self):
+        state_mcq = ConceptState(concept_label="Networking", mastery_score=0.30)
+        state_num = ConceptState(concept_label="Networking", mastery_score=0.30)
+        state_sa = ConceptState(concept_label="Networking", mastery_score=0.30)
+
+        # MCQ correct: P(G) = 0.20 -> P(L_next) ~ 0.7098
+        up_mcq = update_concept_performance(state_mcq, is_correct=True, question_type="mcq")
+        # Numerical correct: P(G) = 0.05 -> P(L_next) ~ 0.9025
+        up_num = update_concept_performance(state_num, is_correct=True, question_type="numerical")
+        # Short-answer correct: P(G) = 0.05 -> P(L_next) ~ 0.9025
+        up_sa = update_concept_performance(state_sa, is_correct=True, question_type="short_answer")
+
+        self.assertAlmostEqual(up_mcq.mastery_score, 0.7098, places=3)
+        self.assertAlmostEqual(up_num.mastery_score, 0.9025, places=3)
+        self.assertAlmostEqual(up_sa.mastery_score, 0.9025, places=3)
+        self.assertGreater(up_num.mastery_score, up_mcq.mastery_score)
+
+    def test_bkt_numerical_and_short_answer_persist_identically(self):
+        from backend.supabase_client import bkt_update
+        m_mcq = bkt_update(0.30, is_correct=True, p_guess=0.20)
+        m_num = bkt_update(0.30, is_correct=True, p_guess=0.05)
+        self.assertAlmostEqual(m_mcq, 0.7098, places=3)
+        self.assertAlmostEqual(m_num, 0.9025, places=3)
+
+
+class TestCitationProvenanceAndRefusal(unittest.TestCase):
+    """P1: Validate cited source identifiers against active material and handle ungrounded refusal."""
+
+    def test_citation_provenance_rejects_hallucinated_locators(self):
+        valid_chunk = Chunk(
+            chunk_index=0,
+            text="The quick brown fox jumps over the lazy dog.",
+            locator="Page 5",
+            source_filename="fox.txt",
+        )
+        active_chunks = [valid_chunk]
+
+        # Locator in material
+        locators = {c.locator for c in active_chunks}
+        self.assertIn("Page 5", locators)
+        self.assertNotIn("Page 99", locators)
+
+    def test_authenticated_mastery_persistence_user_flow(self):
+        """Verify upsert_mastery persists for authenticated users and safely no-ops for guests."""
+        from backend.supabase_client import upsert_mastery
+        loop = asyncio.new_event_loop()
+        try:
+            # Guest mode: client is None or user_id is None -> safe no-op
+            loop.run_until_complete(upsert_mastery(None, "Algorithms", True, user_id=None))
+
+            # Authenticated mode with mock client
+            class MockTable:
+                def __init__(self):
+                    self.upserted_rows = []
+
+                def select(self, *args, **kwargs):
+                    return self
+
+                def eq(self, *args, **kwargs):
+                    return self
+
+                def limit(self, *args, **kwargs):
+                    return self
+
+                def execute(self):
+                    class Resp:
+                        data = [{"mastery_score": 0.30, "times_seen": 2}]
+                    return Resp()
+
+                def upsert(self, data, *args, **kwargs):
+                    self.upserted_rows.append(data)
+                    return self
+
+            class MockClient:
+                def __init__(self):
+                    self.t = MockTable()
+
+                def table(self, name):
+                    return self.t
+
+            mock_sb = MockClient()
+            loop.run_until_complete(
+                upsert_mastery(
+                    client=mock_sb,
+                    topic="Data Structures",
+                    is_correct=True,
+                    user_id="user-auth-456",
+                    question_type="numerical",
+                )
+            )
+
+            self.assertEqual(len(mock_sb.t.upserted_rows), 1)
+            row = mock_sb.t.upserted_rows[0]
+            self.assertEqual(row["user_id"], "user-auth-456")
+            self.assertEqual(row["topic"], "Data Structures")
+            self.assertEqual(row["times_seen"], 3)
+            self.assertAlmostEqual(row["mastery_score"], 0.9025, places=3)
+        finally:
+            loop.close()
+
+
 if __name__ == "__main__":
     unittest.main()

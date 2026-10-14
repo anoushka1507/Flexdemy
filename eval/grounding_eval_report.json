@@ -1,5 +1,5 @@
 {
-  "evaluation_timestamp": "2026-10-14 21:29:51 UTC",
+  "evaluation_timestamp": "2026-10-14 22:50:10 UTC",
   "mode": "offline_retrieval_only",
   "gemini_api_key_configured": false,
   "corpus_file": "eval/material.txt",
@@ -8,13 +8,14 @@
   "n_answerable": 9,
   "n_unanswerable": 4,
   "retrieval_hit_rate": 1.0,
-  "context_recall": 1.0,
+  "retrieval_hits": "9/9 answerable cases",
+  "context_recall_proxy": 1.0,
   "avg_context_precision": null,
   "citation_correctness": null,
   "refusal_accuracy": null,
   "avg_faithfulness": null,
   "avg_relevancy": null,
-  "notes": "Offline run: retrieval hit rate measured directly via local lexical matcher; model-dependent metrics marked null.",
+  "notes": "Retrieval hit rate is computed exclusively on the 9 answerable cases (9/9 = 100.0%); the 4 unanswerable cases test refusal and lack target passages. Context recall is reported as a retrieval-hit-rate proxy across the benchmark.",
   "cases": [
     {
       "question": "What caused the Ariane 5 rocket failure?",
