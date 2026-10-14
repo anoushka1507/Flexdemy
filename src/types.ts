@@ -63,6 +63,9 @@ export interface Quiz {
   questions: Question[];
   totalQuestions: number;
   timeLimitMinutes?: number;
+  // Card was reconstructed from a past completed attempt (quiz_history),
+  // not a live, ready-to-start quiz with real questions loaded.
+  isFromHistory?: boolean;
 }
 
 export interface AdaptiveQuizLaunch {

@@ -158,6 +158,24 @@ export default function App() {
 
         setQuizResults(results);
 
+        // Quizzes tab was never rehydrated from persisted history before
+        // this — it only ever held whatever was generated in the current
+        // browser session, so a completed quiz vanished from "Available
+        // Quizzes" the moment you refreshed. Rebuild cards for it here;
+        // these have no questions loaded (we don't persist those), so
+        // clicking one opens its past results instead of "starting" it.
+        setQuizzesList(
+          rows.map((row) => ({
+            id: row.quiz_id,
+            title: row.quiz_title,
+            topic: row.topic || row.quiz_title,
+            difficulty: (row.difficulty || 'Medium') as Quiz['difficulty'],
+            questions: [],
+            totalQuestions: row.total_questions,
+            isFromHistory: true,
+          }))
+        );
+
         setRecentHistory(
           rows.slice(0, 4).map((row) => ({
             id: row.quiz_id,
@@ -354,7 +372,7 @@ export default function App() {
   // revisiting it later (after a refresh, or any other quiz) showed
   // nothing. Fetch the most recent persisted entry and reconstruct
   // enough of a QuizResult to make Insights/flashcards work on it.
-  const handleOpenLatestResults = async () => {
+  const handleOpenQuizResult = async (quizId?: string) => {
     const { data: sessionData } = await supabase.auth.getSession();
     const accessToken = sessionData.session?.access_token;
     if (!accessToken) return;
@@ -369,30 +387,33 @@ export default function App() {
       const rows: any[] = data.history || [];
       if (rows.length === 0) return;
 
-      const latest = rows[0];
+      const match = quizId ? rows.find((r) => r.quiz_id === quizId) : rows[0];
+      if (!match) return;
 
       const reconstructed: QuizResult = {
-        quizId: latest.quiz_id,
-        quizTitle: latest.quiz_title,
-        scorePercentage: latest.score_percentage,
-        totalQuestions: latest.total_questions,
-        correctAnswersCount: latest.correct_answers_count,
+        quizId: match.quiz_id,
+        quizTitle: match.quiz_title,
+        scorePercentage: match.score_percentage,
+        totalQuestions: match.total_questions,
+        correctAnswersCount: match.correct_answers_count,
         incorrectAnswersCount:
-          latest.total_questions - latest.correct_answers_count,
+          match.total_questions - match.correct_answers_count,
         timeSpentSeconds: 0,
-        dateCompleted: latest.completed_at,
+        dateCompleted: match.completed_at,
         userAnswers: {},
-        topicBreakdown: latest.topic_breakdown || [],
+        topicBreakdown: match.topic_breakdown || [],
       };
 
       setQuizResult(reconstructed);
-      setAdaptiveSessionId(latest.session_id || undefined);
+      setAdaptiveSessionId(match.session_id || undefined);
       setResultsInitialTab('insights');
       setCurrentView('quiz-results');
     } catch {
       // Best-effort — nothing to show if this fails.
     }
   };
+
+  const handleOpenLatestResults = () => handleOpenQuizResult();
 
   // ==========================================================
   // LOGIN
@@ -491,6 +512,7 @@ export default function App() {
               setCurrentView={setCurrentView}
               userProfile={userProfile}
               onStartQuiz={handleStartQuiz}
+              onOpenQuizResult={handleOpenQuizResult}
               sampleQuizzes={quizzesList}
               recentHistory={recentHistory}
               quizResults={quizResults}
@@ -575,13 +597,13 @@ export default function App() {
 
                       <button
                         onClick={() =>
-                          handleStartQuiz(
-                            quiz
-                          )
+                          quiz.isFromHistory
+                            ? handleOpenQuizResult(quiz.id)
+                            : handleStartQuiz(quiz)
                         }
                         className="w-full py-2.5 rounded-xl bg-[#ececf4] text-[#7372A5] font-bold text-xs"
                       >
-                        Start Quiz →
+                        {quiz.isFromHistory ? 'View Results →' : 'Start Quiz →'}
                       </button>
 
                     </div>
