@@ -234,52 +234,75 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
       </header>
 
       {/* Main Grid */}
-      <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-4 gap-8">
+      <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-4 gap-8 items-start">
         
-        {/* Left Performance Hub Navigation */}
-        <div className="lg:col-span-1 space-y-4">
-          <div className="bg-white p-4 rounded-2xl border border-[#d8d7e8] shadow-xs space-y-2">
+        {/* Left Navigation Sidebar */}
+        <aside aria-label="Results navigation" className="lg:col-span-1 space-y-4">
+          <div className="bg-white p-4 rounded-2xl border border-[#d8d7e8] shadow-xs space-y-1.5">
             <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-1">
               Performance Hub
             </p>
             <button
+              type="button"
               onClick={() => handleTabChange('review')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+              aria-current={activeTab === 'review' ? 'page' : undefined}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#7372A5] ${
                 activeTab === 'review'
                   ? 'bg-[#ececf4] text-[#7372A5]'
-                  : 'text-gray-600 hover:bg-[#ececf4]'
+                  : 'text-gray-600 hover:bg-[#ececf4] hover:text-[#222138]'
               }`}
             >
-              <span className="material-symbols-outlined text-lg">fact_check</span>
+              <span className="material-symbols-outlined text-lg" aria-hidden="true">fact_check</span>
               <span>Question Review</span>
             </button>
 
             <button
+              type="button"
               onClick={() => handleTabChange('insights')}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all ${
+              aria-current={activeTab === 'insights' ? 'page' : undefined}
+              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#7372A5] ${
                 activeTab === 'insights'
                   ? 'bg-[#ececf4] text-[#7372A5]'
-                  : 'text-gray-600 hover:bg-[#ececf4]'
+                  : 'text-gray-600 hover:bg-[#ececf4] hover:text-[#222138]'
               }`}
             >
-              <span className="material-symbols-outlined text-lg">insights</span>
+              <span className="material-symbols-outlined text-lg" aria-hidden="true">insights</span>
               <span>Topic Mastery</span>
             </button>
           </div>
 
-          <div className="bg-[#222138] p-5 rounded-2xl text-white space-y-3">
-            <h4 className="font-bold text-sm">Want to improve your score?</h4>
-            <p className="text-xs text-gray-300 leading-relaxed">
-              Retake this quiz to reinforce weak areas or generate a new AI adaptive quiz.
+          <div className="bg-white p-4 rounded-2xl border border-[#d8d7e8] shadow-xs space-y-1.5">
+            <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider px-3 mb-1">
+              Quick Actions
             </p>
             <button
-              onClick={onRetakeQuiz}
-              className="w-full py-2 bg-[#7372A5] text-white hover:bg-[#585785] rounded-xl text-xs font-bold shadow-xs transition-colors"
+              type="button"
+              onClick={() => setCurrentView('dashboard')}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-gray-600 hover:bg-[#ececf4] hover:text-[#222138] transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#7372A5]"
             >
-              Retake Quiz
+              <span className="material-symbols-outlined text-lg text-gray-500" aria-hidden="true">dashboard</span>
+              <span>Dashboard</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onStartAnotherQuiz}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-gray-600 hover:bg-[#ececf4] hover:text-[#222138] transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#7372A5]"
+            >
+              <span className="material-symbols-outlined text-lg text-gray-500" aria-hidden="true">add_circle</span>
+              <span>New Quiz</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onRetakeQuiz}
+              className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-xs font-bold text-gray-600 hover:bg-[#ececf4] hover:text-[#222138] transition-all focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-[#7372A5]"
+            >
+              <span className="material-symbols-outlined text-lg text-gray-500" aria-hidden="true">replay</span>
+              <span>Retake Quiz</span>
             </button>
           </div>
-        </div>
+        </aside>
 
         {/* Center/Right Main Section */}
         <div className="lg:col-span-3 space-y-6">
@@ -346,24 +369,6 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                 <span className="text-xs font-bold text-rose-700">Incorrect Answers</span>
               </div>
 
-            </div>
-
-            {/* Quick Action Buttons */}
-            <div className="flex flex-wrap items-center justify-center gap-4 pt-2">
-              <button
-                onClick={() => setCurrentView('dashboard')}
-                className="px-6 py-2.5 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-md transition-all flex items-center gap-2"
-              >
-                Go to Dashboard
-              </button>
-
-              <button
-                onClick={onStartAnotherQuiz}
-                className="px-6 py-2.5 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-md transition-all flex items-center gap-2"
-              >
-                <span className="material-symbols-outlined text-base">upload_file</span>
-                <span>Upload Material / Quizzes</span>
-              </button>
             </div>
           </div>
 
