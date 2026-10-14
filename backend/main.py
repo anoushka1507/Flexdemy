@@ -10,6 +10,7 @@ from fastapi.responses import Response
 
 from fastapi.middleware.cors import CORSMiddleware
 
+import asyncio
 import os
 import random
 import sys
@@ -1102,7 +1103,11 @@ async def record_answer_and_advance(
         concept_label,
     )
 
-    await upsert_mastery(
+    # Not awaited yet — upsert_mastery never raises (it swallows its
+    # own errors internally), so it's safe to run concurrently with
+    # next-question generation below instead of serially blocking the
+    # Gemini call behind a database round-trip first.
+    mastery_task = upsert_mastery(
         sb_client,
         topic,
         was_correct,
@@ -1117,6 +1122,8 @@ async def record_answer_and_advance(
         session.questions_asked
         >= session.total_questions
     ):
+
+        await mastery_task
 
         session.current_question = None
         session.current_concept_label = None
@@ -1152,15 +1159,18 @@ async def record_answer_and_advance(
 
     try:
 
-        (
+        _, (
             next_concept,
             next_question,
             next_question_number,
-        ) = await generate_next_question(
-            session,
-            sb_client=sb_client,
-            question_types=session.question_types,
-            user_id=user_id,
+        ) = await asyncio.gather(
+            mastery_task,
+            generate_next_question(
+                session,
+                sb_client=sb_client,
+                question_types=session.question_types,
+                user_id=user_id,
+            ),
         )
 
     except Exception as e:
