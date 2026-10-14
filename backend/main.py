@@ -314,20 +314,22 @@ def clamp_difficulty(
 def update_concept_performance(
     state: ConceptState,
     is_correct: bool,
+    question_type: str = "mcq",
 ) -> ConceptState:
     """
-    Update performance statistics for the answered concept.
-
-    Concept performance is tracked independently from the
-    global adaptive difficulty.
+    Update performance statistics and in-session BKT mastery for the answered concept.
     """
-
     state.times_asked += 1
 
     if is_correct:
         state.correct_count += 1
     else:
         state.incorrect_count += 1
+
+    from backend.supabase_client import bkt_update
+    p_guess = 0.05 if question_type in ("numerical", "short_answer") else 0.20
+    current_m = getattr(state, "mastery_score", 0.30)
+    state.mastery_score = bkt_update(current_m, is_correct, p_guess=p_guess)
 
     return state
 
@@ -363,26 +365,16 @@ def choose_weighted_concept(
     weights = []
 
     for concept in concepts:
-
-        state = session.concept_states[
-            concept.label
-        ]
+        state = session.concept_states[concept.label]
 
         if state.times_asked == 0:
             weight = CONCEPT_WEIGHTS["weak"]
-
         else:
-            accuracy = (
-                state.correct_count /
-                state.times_asked
-            )
-
-            if accuracy < 0.50:
+            mastery = getattr(state, "mastery_score", 0.30)
+            if mastery < 0.45:
                 weight = CONCEPT_WEIGHTS["weak"]
-
-            elif accuracy < 0.80:
+            elif mastery < 0.75:
                 weight = CONCEPT_WEIGHTS["moderate"]
-
             else:
                 weight = CONCEPT_WEIGHTS["strong"]
 
@@ -592,11 +584,19 @@ async def read_uploaded_material(
 
     import hashlib
     content_hash = hashlib.sha256(file_bytes).hexdigest()
-    if content_hash in material_chunks_cache:
-        return material_chunks_cache[content_hash]
-
     raw_filename = file.filename or "uploaded_material"
     filename = raw_filename.lower()
+
+    if content_hash in material_chunks_cache:
+        # Return a copy of cached chunks with the current upload's filename preserved
+        cached = material_chunks_cache[content_hash]
+        return [
+            c.model_copy(update={
+                "source_filename": raw_filename,
+                "doc_id": f"{content_hash[:8]}_{raw_filename[:12]}",
+            })
+            for c in cached
+        ]
 
     SUPPORTED_EXTENSIONS = (
         ".pdf", ".pptx", ".txt", ".md",
@@ -621,6 +621,19 @@ async def read_uploaded_material(
                 "Flexdemy supports PDF textbooks (.pdf), presentation slides (.pptx), "
                 "markdown/text notes (.md, .txt), and lecture videos (.mp4, .mov, .webm, .mkv)."
             ),
+        )
+
+    # Magic byte integrity checks to prevent spoofed/corrupted files
+    if (filename.endswith(".pdf") or file.content_type == "application/pdf") and not file_bytes.startswith(b"%PDF-"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Corrupted or invalid PDF '{raw_filename}': file does not have a valid %PDF- header.",
+        )
+
+    if (filename.endswith(".pptx") or file.content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation") and not file_bytes.startswith(b"PK\x03\x04"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Corrupted or invalid PPTX '{raw_filename}': file does not have a valid PK ZIP signature.",
         )
 
     chunks: list[Chunk] = []
@@ -1418,6 +1431,15 @@ async def answer_adaptive_question(
         concept_label,
         was_correct,
         sb_client,
+        extra_fields={
+            "explanation": question.explanation or (
+                "That is the correct answer! Well done."
+                if was_correct
+                else "Review the cited source below to master this concept."
+            ),
+            "misconception": selected_option.misconception_tag,
+            "source_locator": question.source_locator,
+        },
         user_id=user_id,
     )
 
@@ -1494,6 +1516,7 @@ async def answer_adaptive_question_open(
         verification.is_correct,
         sb_client,
         extra_fields={
+            "explanation": verification.feedback,
             "feedback": verification.feedback,
             "source_locator": verification.source_locator,
         },

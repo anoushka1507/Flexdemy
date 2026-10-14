@@ -18,6 +18,7 @@ class Chunk(BaseModel):
     chunk_index: int
     text: str
     approx_page_range: str = Field(
+        default="1",
         description="Approximate pages this text spans, e.g., '1-2'"
     )
     source_type: SourceType = "pdf"
@@ -165,6 +166,8 @@ class ConceptState(BaseModel):
 
     incorrect_count: int = 0
 
+    mastery_score: float = 0.30
+
 
 class AdaptiveQuestion(BaseModel):
     """
@@ -260,8 +263,12 @@ class AdaptiveQuizAnswerResponse(BaseModel):
     next_concept: str | None = None
 
     next_difficulty: Difficulty | None = None
-
     question: QuestionDraft | None = None
+
+    explanation: str | None = None
+    feedback: str | None = None
+    misconception: str | None = None
+    source_locator: str | None = None
 
 
 # ============================================================

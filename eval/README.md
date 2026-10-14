@@ -1,44 +1,42 @@
-# Evaluation harness (Track D, Requirement 5)
+# Evaluation Harness (Track D, Requirement 5)
 
-RAGAS pulls in a broken `langchain_community` dependency chain as of this
-writing (`ChatVertexAI` import fails). Rather than burn hours fixing someone
-else's dependency conflict, this is a small self-built harness that computes
-the same conceptually-grounded metrics via Gemini-as-judge, which the brief
-explicitly allows ("RAGAS, DeepEval, TruLens, **or similar**").
+This directory contains automated, reproducible evaluation harnesses and benchmarks for **Track D: Personalized Tutoring & Adaptive Learning**.
 
-## Files
+## Test Datasets
 
-- `material.txt` — placeholder study material. **Swap this for your real
-  course material** (MIT OCW transcript, NPTEL slides, textbook excerpt...).
-- `test_set.json` — hand-written questions against `material.txt`, each
-  tagged with whether it's answerable from the material and (if so) which
-  source locator should ground the answer. **Rewrite this to match whatever
-  material you swap in** — the questions here are specific to the
-  photosynthesis placeholder.
-- `run_grounding_eval.py` — runs every question in `test_set.json` through
-  the grounded-chat pipeline and reports:
-  - **Retrieval hit rate** — for answerable questions, did the expected
-    source locator show up in the top-k retrieved chunks (context recall
-    proxy)
-  - **Refusal accuracy** — correct is_grounded=True/False classification
-  - **Faithfulness** — Gemini-judge score (1-5) on whether the answer's
-    claims are supported by the cited excerpts
-  - **Answer relevancy** — Gemini-judge score (1-5) on whether the answer
-    addresses the question asked
-- `simulate_students.py` — runs several simulated student profiles (biased
-  toward being weak/strong on certain concepts) through the live adaptive
-  quiz API repeatedly, logging accuracy trend, difficulty adaptation, and
-  question-repetition rate as a personalization-effectiveness proxy.
+- `material.txt`: Representative Software Engineering curriculum chapter (*Software Engineering - Chapter 1: Introduction* by Ashish Pandey), covering the Software Crisis, empirical Standish Group CHAOS metrics, infamous failures (Ariane 5 64-to-16 bit float overflow, Patriot missile timing drift, Space Shuttle fuel dump restart crashes), and Brooks' "No Silver Bullet".
+- `test_set.json`: 13 verified benchmark queries, including:
+  - Multi-passage factual queries across sections.
+  - Known ground-truth source locators (`Section 1`, `Section 2`).
+  - Deliberately unanswerable/out-of-scope negative queries (*"Who wrote Romeo and Juliet?"*, *"Boiling point of water at sea level"*, *"Backpropagation neural networks"*).
 
-## Running
+## Evaluation Scripts
+
+### 1. Grounding & Retrieval Evaluation (`run_grounding_eval.py`)
+Computes:
+- **Retrieval Hit Rate / Context Recall**: Evaluates whether the ground-truth section/locator appears in top-$k$ retrieved chunks.
+- **Context Precision**: Fraction of retrieved passages judged genuinely relevant.
+- **Citation Correctness**: Verifies emitted citation locators against actual material chunks.
+- **Refusal Precision & Recall**: Tests whether out-of-scope questions are refused cleanly without hallucination.
+- **Faithfulness & Answer Relevancy**: LLM-as-judge scoring (1–5) on supported claims.
+
+*Integrity note:* When running offline without `GEMINI_API_KEY`, model-dependent metrics (`faithfulness`, `relevancy`, `context_precision`, `refusal_accuracy`) are reported as `null` rather than generating fabricated scores. Retrieval Hit Rate is computed directly from local lexical retrieval.
+
+### 2. Multi-Session Simulated Learner Evaluation (`simulate_students.py`)
+Simulates synthetic student agents across multiple learning sessions:
+- Profiles: `strong_learner` ($p=0.85$), `average_learner` ($p=0.60$), and `struggling_learner` ($p=0.35$).
+- Tracks Corbett & Anderson **Bayesian Knowledge Tracing (BKT)** posterior probabilities $P(L_t)$.
+- Verifies dynamic difficulty streak adaptation (+1 on 2 consecutive correct, -1 on 2 consecutive incorrect).
+- Evaluates cross-session deduplication against a realistic item pool.
+- *Methodology:* Fixed-seed synthetic agent simulation (not a human-subject clinical trial).
+
+## Execution Commands
 
 ```bash
-# backend must be running on :8000 (uvicorn backend.main:app)
-cd backend && venv\Scripts\activate  # or source venv/bin/activate
-pip install -r ../requirements.txt
-python ../eval/run_grounding_eval.py
-python ../eval/simulate_students.py
-```
+# Run Grounding Evaluation
+python eval/run_grounding_eval.py
 
-Both scripts print a metrics table and write a JSON report next to
-themselves for inclusion in the project documentation deliverable.
+# Run Simulated Learner Benchmark
+python eval/simulate_students.py
+```
+Output reports are written to `eval/grounding_eval_report.json` and `eval/simulated_students_report.json`.

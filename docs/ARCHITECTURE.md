@@ -171,13 +171,14 @@ answers raise difficulty one step (easy→medium→hard), two consecutive
 incorrect answers lower it, clamped at the boundaries
 (`clamp_difficulty` in `backend/main.py`).
 
-### 4.2 Concept selection (pre-existing, unchanged)
+### 4.2 Concept selection
 
-Within a session, the next concept to ask about is chosen by weighted
-random selection (`choose_weighted_concept`): concepts with no answered
-questions yet, or with session accuracy below 50%, get weight 3 ("weak");
-50-80% accuracy gets weight 2; above 80% gets weight 1. This keeps the quiz
-focused on what the student is actually struggling with.
+Within a session, the next concept to ask about is chosen by performance-aware weighted random selection (`choose_weighted_concept`):
+- Concepts with real BKT mastery below $0.45$, or with no answered questions yet, get weight 3 ("weak").
+- Concepts with mastery between $0.45$ and $0.75$ get weight 2 ("moderate").
+- Concepts with mastery above $0.75$ get weight 1 ("strong").
+
+This directly ties item selection to the Bayesian posterior mastery state, ensuring the assessment continually addresses the learner's actual knowledge gaps.
 
 ### 4.3 Persisted Mastery: Closed-Form Bayesian Knowledge Tracing (BKT)
 
@@ -205,21 +206,19 @@ Students can either start a standard adaptive session (where unseen concepts ini
 The evaluation system tests the actual application against known ground truth outcomes across two reproducible harnesses:
 
 ### 5.1 Grounding & Citation Evaluation (`eval/run_grounding_eval.py`)
-Tested against a multi-page Operating Systems / Computer Systems curriculum corpus (`eval/grounding_eval_dataset.json`) with known ground truth source locators and explicit negative/unanswerable test items:
-- **Retrieval Hit Rate:** **100.0%** (13/13 test cases)
-- **Context Recall:** **100.0%**
-- **Context Precision:** **92.3%**
-- **Citation Correctness:** **100.0%**
-- **Refusal Accuracy:** **100.0%** (3/3 out-of-scope questions refused cleanly without hallucination)
-- **Refusal Precision:** **100.0%**
-- **Refusal Recall:** **100.0%**
+Tested against a multi-page Software Engineering curriculum corpus (`eval/material.txt` and `eval/test_set.json`) with known ground truth source locators and explicit negative/unanswerable test items:
+- **Evaluation Mode:** Offline Deterministic Retrieval Only (without `GEMINI_API_KEY`).
+- **Total Test Cases:** 13 (9 answerable, 4 unanswerable).
+- **Retrieval Hit Rate:** **100.0%** (13/13 test cases).
+- **Context Recall:** **100.0%** (13/13 test cases).
+- **Generative Metrics (Faithfulness, Relevancy, Citation Correctness, Refusal Accuracy):** `null` (requires GEMINI_API_KEY; explicitly reported as `null` rather than fabricated when running offline).
 
 ### 5.2 Multi-Profile Simulated Learner Evaluation (`eval/simulate_students.py`)
-Simulates synthetic student agents (`strong_learner`, `average_learner`, `struggling_learner`) across multiple multi-turn sessions (6 complete sessions):
-- **Strong Learner:** 100% accuracy, Mastery $0.30 \to 0.94$, Difficulty transitioned to `HARD`.
-- **Average Learner:** 62.5% accuracy, Mastery $0.30 \to 0.87$, Difficulty balanced at `MEDIUM`.
-- **Struggling Learner:** 25.0% accuracy, Mastery $0.30 \to 0.29$, Difficulty transitioned to `EASY`.
-- **Cross-Session Question Repetition:** **0.0%**.
+Simulates synthetic student agents across multiple multi-turn sessions (Methodology: Synthetic Agent Simulation with seed `11`):
+- **Strong Learner:** Accuracies: [80%, 80%], Mastery: $0.30 \to 0.87$ (Delta: +0.57), Difficulty transitioned to `HARD`.
+- **Average Learner:** Accuracies: [60%, 40%], Mastery: $0.30 \to 0.42$ (Delta: +0.12), Difficulty balanced at `MEDIUM`.
+- **Struggling Learner:** Accuracies: [20%, 0%], Mastery: $0.30 \to 0.30$ (Delta: +0.01), Difficulty transitioned to `EASY`.
+- **Cross-Session Question Repetition:** **0.0%** across all student profiles.
 
 ## 6. Optional Enhancements Implemented
 

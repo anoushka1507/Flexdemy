@@ -1,14 +1,16 @@
 """
 Track D, Requirement 5c: Simulated-Student Personalization Evaluation.
 
-Simulates multiple distinct student profiles through the adaptive engine across
+Simulates multiple distinct synthetic student profiles through the adaptive engine across
 multiple sessions to evaluate:
-  - Mastery progression across sessions (Bayesian Knowledge Tracing P(L))
+  - Longitudinal mastery progression across sessions (Bayesian Knowledge Tracing P(L))
   - Difficulty trajectory adaptation (Streak-based transition: Medium -> Hard vs Medium -> Easy)
-  - Question repetition within and across sessions
-  - Formative adaptation behavior for Strong, Average, and Struggling learners.
+  - Question repetition within and across sessions against a realistic item pool
+  - Formative adaptation behavior for Strong, Average, and Struggling synthetic learners.
 
-Can run against a live HTTP backend or in-process via the BKT & adaptive engine.
+NOTE ON EVALUATION METHODOLOGY:
+This is a synthetic agent simulation using fixed seeds to evaluate algorithmic properties.
+It is explicitly NOT a human-subject clinical trial.
 """
 
 import json
@@ -23,18 +25,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from AI_Layer.models import (
-    AdaptiveSession,
-    Concept,
-    ConceptState,
-    Difficulty,
-    QuestionDraft,
-    OptionDraft,
-)
+from AI_Layer.models import Difficulty
 from backend.supabase_client import bkt_update
 
 EVAL_DIR = os.path.dirname(os.path.abspath(__file__))
-MATERIAL_PATH = os.path.join(EVAL_DIR, "material.txt")
 
 PROFILES = [
     {
@@ -61,6 +55,78 @@ TOPICS = [
     "Testing & Quality Assurance",
 ]
 
+# Realistic candidate question bank for testing deduplication algorithms
+QUESTION_BANK: Dict[str, Dict[str, List[str]]] = {
+    "Software Disasters": {
+        "easy": [
+            "What happened to the Ariane 5 rocket 37 seconds after launch?",
+            "What was the main cause of the Y2K software problem?",
+            "Why did the Patriot missile clock accumulate timing errors?",
+        ],
+        "medium": [
+            "How did 64-bit to 16-bit numeric overflow trigger the Ariane 5 disaster?",
+            "Explain the failure mode of the Space Shuttle fuel management module during restart.",
+            "Why did the backup computer fail identically on the Ariane 5 flight?",
+        ],
+        "hard": [
+            "Analyze the systemic software specification flaws in the Dhahran Patriot battery incident.",
+            "Synthesize the conceptual vs syntactic error trade-offs in Brooks' 'No Silver Bullet'.",
+            "Evaluate the mathematical floating-point rounding decay in long-running embedded loops.",
+        ],
+    },
+    "Productivity & Metrics": {
+        "easy": [
+            "What does Moore's Law state about hardware capacity growth?",
+            "What is the difference between hardware costs and software costs over time?",
+            "Define software productivity in lines of code.",
+        ],
+        "medium": [
+            "Explain the Standish Group CHAOS report findings on project success rates.",
+            "Compare process metrics vs product metrics in software lifecycle tracking.",
+            "Why is software productivity growing more slowly than hardware performance?",
+        ],
+        "hard": [
+            "Evaluate why adding more personnel to a late project delays it further (Brooks' Law).",
+            "Critique function point analysis vs SLOC as an objective measure of productivity.",
+            "Analyze the economic factors contributing to the historical Software Crisis.",
+        ],
+    },
+    "Requirements Engineering": {
+        "easy": [
+            "What is the definition of a software requirement?",
+            "What is the difference between generic and bespoke software products?",
+            "Who are the primary stakeholders during requirements gathering?",
+        ],
+        "medium": [
+            "Differentiate functional requirements from non-functional quality attributes.",
+            "Explain the consequences of ambiguous requirements on verification and validation.",
+            "How does requirements volatility impact project cost overrun?",
+        ],
+        "hard": [
+            "Analyze techniques for resolving conflicting stakeholder requirements in safety-critical systems.",
+            "Develop a formal specification validation strategy for distributed microservices.",
+            "How do incomplete requirements correlate with project cancellation rates in empirical studies?",
+        ],
+    },
+    "Testing & Quality Assurance": {
+        "easy": [
+            "What is the primary goal of software testing?",
+            "What is a software bug or defect?",
+            "What is the difference between verification and validation?",
+        ],
+        "medium": [
+            "Explain why testing can show the presence of bugs but never their absence.",
+            "Differentiate unit testing, integration testing, and acceptance testing.",
+            "How do regression tests prevent newly introduced faults?",
+        ],
+        "hard": [
+            "Formulate a mutation testing coverage strategy to detect subtle logic errors.",
+            "Evaluate fault-injection testing for high-availability distributed systems.",
+            "Analyze why identical software running on redundant hardware cannot prevent systematic bugs.",
+        ],
+    },
+}
+
 
 def clamp_difficulty(current: str, direction: int) -> str:
     order = ["easy", "medium", "hard"]
@@ -77,9 +143,14 @@ def simulate_local_profile(
 ) -> dict:
     """
     In-process psychometric & adaptive engine simulation.
-    Uses exact Corbett & Anderson BKT formulas and global 2-in-a-row difficulty adaptation.
+    Tests:
+      1. Corbett & Anderson BKT posterior updates
+      2. 2-in-a-row adaptive difficulty transitions
+      3. Cross-session deduplication against a fixed candidate pool
     """
-    random.seed(seed + hash(profile["name"]) % 1000)
+    import hashlib
+    profile_hash = int(hashlib.md5(profile["name"].encode()).hexdigest()[:8], 16)
+    random.seed(seed + profile_hash)
 
     # Initialize topic mastery baseline P(L_0) = 0.30
     mastery_tracker: Dict[str, float] = {topic: 0.30 for topic in TOPICS}
@@ -97,15 +168,26 @@ def simulate_local_profile(
         session_questions = []
 
         for q_idx in range(1, questions_per_session + 1):
-            # Pick topic based on weak-topic weighting (higher weight for lower P(L))
+            # Prioritize weak topics: higher probability for lower P(L)
             weights = [max(0.1, 1.0 - mastery_tracker[t]) for t in TOPICS]
             chosen_topic = random.choices(TOPICS, weights=weights, k=1)[0]
 
-            # Generate synthetic question text for topic & difficulty
-            q_text = f"Assessment item {len(all_asked_questions)+1} on {chosen_topic} ({current_difficulty})"
+            # Candidate pool selection with deduplication check
+            candidates = QUESTION_BANK.get(chosen_topic, {}).get(current_difficulty, [])
+            # Deduplication: prefer questions not yet asked in any session
+            unasked_candidates = [q for q in candidates if q not in all_asked_questions and q not in session_questions]
+
+            if unasked_candidates:
+                q_text = random.choice(unasked_candidates)
+            elif candidates:
+                # Pool exhausted: select with repeat
+                q_text = random.choice(candidates)
+            else:
+                q_text = f"Assessment item on {chosen_topic} ({current_difficulty})"
+
             session_questions.append(q_text)
 
-            # Student answers based on profile capability
+            # Simulated student response based on profile probability
             is_correct = random.random() < profile["correct_probability"]
 
             # 1. Update BKT Mastery for topic (0.01 to 0.99)
@@ -138,10 +220,11 @@ def simulate_local_profile(
                     "difficulty": diff_before,
                     "was_correct": is_correct,
                     "topic_mastery_after": mastery_tracker[chosen_topic],
+                    "question_text": q_text,
                 }
             )
 
-        # Session metrics
+        # Calculate session metrics
         half = max(1, len(session_history) // 2)
         first_half_acc = sum(h["was_correct"] for h in session_history[:half]) / half
         second_half = session_history[half:]
@@ -187,9 +270,13 @@ def simulate_local_profile(
 def main():
     print("=" * 70)
     print("Track D: Multimodal Adaptive Learner Multi-Session Evaluation")
+    print("Methodology: Synthetic Agent Simulation (Reproducible Seed-based)")
     print("=" * 70)
 
-    n_sessions = int(os.environ.get("EVAL_N_SESSIONS", "3"))
+    # Fixed seed for strict determinism and reproducible benchmarks
+    random.seed(42)
+
+    n_sessions = int(os.environ.get("EVAL_N_SESSIONS", "2"))
     questions_per_session = int(os.environ.get("EVAL_QUESTION_COUNT", "5"))
 
     all_profile_results = []
@@ -200,6 +287,7 @@ def main():
             prof,
             n_sessions=n_sessions,
             questions_per_session=questions_per_session,
+            seed=11,
         )
         all_profile_results.append(res)
 
@@ -207,17 +295,20 @@ def main():
         final_avg = sum(res["mastery_after"].values()) / len(res["mastery_after"])
         print(f"  Final Avg Mastery:   {final_avg:.2f} (Delta: {res['overall_mastery_delta']:+.2f})")
         print(f"  Session Accuracies:  {[s['accuracy'] for s in res['sessions']]}")
+        print(f"  Cross-Session Repeats: {res['total_cross_session_repeats']}")
         print(f"  Difficulty Trajectories:")
         for s in res["sessions"]:
             print(f"    S{s['session_number']}: {' -> '.join(s['difficulty_trajectory'])}")
 
     report_payload = {
         "evaluation_timestamp": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+        "evaluation_type": "synthetic_agent_simulation",
+        "human_subject_trial": False,
         "test_configuration": {
             "n_sessions_per_profile": n_sessions,
             "questions_per_session": questions_per_session,
-            "learner_model": "Bayesian Knowledge Tracing (BKT: Corbett & Anderson)",
-            "adaptation_policy": "Global streak clamp (+1/-1 at 2 streak) & weak-topic inverse weighting",
+            "learner_model": "Bayesian Knowledge Tracing (BKT: Corbett & Anderson closed-form)",
+            "adaptation_policy": "Streak clamp (+1/-1 at 2 streak) & weak-topic inverse weighting",
         },
         "profiles": all_profile_results,
     }

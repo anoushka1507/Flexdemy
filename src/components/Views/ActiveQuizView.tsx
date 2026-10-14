@@ -153,6 +153,11 @@ export const ActiveQuizView: React.FC<
   }>>({});
 
   const [
+    pendingNextQuestion,
+    setPendingNextQuestion,
+  ] = useState<any | null>(null);
+
+  const [
     isTutorChatOpen,
     setIsTutorChatOpen,
   ] = useState(false);
@@ -208,6 +213,8 @@ export const ActiveQuizView: React.FC<
     setSecondsSpent(0);
     setAdaptiveError('');
     setFeedbackState({});
+    setPendingNextQuestion(null);
+    setAnsweredCorrectly({});
 
   }, [
   quiz.id,
@@ -368,83 +375,200 @@ export const ActiveQuizView: React.FC<
 
 };
 
-  const handleCheckCurrentAnswer = () => {
-    if (isMcqQuestion) {
-      const selected = selectedAnswers[currentQuestion.id];
-      if (selected === undefined || selected === null) {
-        setAdaptiveError('Please select an option first.');
-        return;
-      }
-      setAdaptiveError('');
-      const wasCorrect = selected === currentQuestion.correctAnswerIndex;
-      let misconception: string | null = null;
-      const bq = currentQuestion.backendQuestion as any;
-      if (bq?.options && Array.isArray(bq.options)) {
-        misconception = bq.options[selected]?.misconception_tag || null;
-      }
+  const handleCheckCurrentAnswer = async () => {
+    if (adaptiveLoading || feedbackState[currentQuestion.id]?.isChecked) return;
 
-      const explanation =
-        currentQuestion.explanation ||
-        bq?.explanation ||
-        currentQuestion.hint ||
-        (wasCorrect
-          ? 'Great job! Your answer matches the source concept.'
-          : 'Review the cited source below to master this concept.');
+    if (isAdaptive && adaptiveSessionId) {
+      if (isMcqQuestion) {
+        const selected = selectedAnswers[currentQuestion.id];
+        if (selected === undefined || selected === null) {
+          setAdaptiveError('Please select an option first.');
+          return;
+        }
+        setAdaptiveError('');
+        setAdaptiveLoading(true);
 
-      const sourceLocator = currentQuestion.sourceLocator || bq?.source_locator || '';
+        try {
+          const response = await fetch('/api/answer-adaptive-question', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: adaptiveSessionId,
+              question_number: currentQuestion.id,
+              selected_option_index: selected,
+            }),
+          });
 
-      setFeedbackState((prev) => ({
-        ...prev,
-        [currentQuestion.id]: {
-          isChecked: true,
-          wasCorrect,
-          explanation,
-          misconception,
-          sourceLocator,
-        },
-      }));
-    } else {
-      const answerText = (openAnswers[currentQuestion.id] || '').trim();
-      if (!answerText) {
-        setAdaptiveError('Please enter an answer first.');
-        return;
-      }
-      setAdaptiveError('');
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || 'Could not process the answer.');
+          }
 
-      const bq = currentQuestion.backendQuestion as any;
-      const expected = bq?.expected_answer || '';
-      let wasCorrect = false;
+          const data = await response.json();
+          const wasCorrect = Boolean(data.was_correct);
 
-      if (currentQuestion.questionType === 'numerical') {
-        const numStudent = parseFloat(answerText.replace(/,/g, ''));
-        const numExpected = parseFloat(String(expected).replace(/,/g, ''));
-        const tol = bq?.numerical_tolerance || 0.05;
-        if (!isNaN(numStudent) && !isNaN(numExpected)) {
-          wasCorrect = Math.abs(numStudent - numExpected) <= Math.max(tol, 0.01 * Math.abs(numExpected));
+          setAnsweredCorrectly((prev) => ({
+            ...prev,
+            [currentQuestion.id]: wasCorrect,
+          }));
+
+          setFeedbackState((prev) => ({
+            ...prev,
+            [currentQuestion.id]: {
+              isChecked: true,
+              wasCorrect,
+              explanation:
+                data.explanation ||
+                (wasCorrect
+                  ? 'Great job! Your answer matches the source concept.'
+                  : 'Review the cited source below to master this concept.'),
+              misconception: data.misconception || null,
+              sourceLocator: data.source_locator || currentQuestion.sourceLocator || '',
+            },
+          }));
+
+          setPendingNextQuestion(data);
+        } catch (err: any) {
+          console.error('Adaptive answer error:', err);
+          setAdaptiveError(err?.message || 'Error processing answer.');
+        } finally {
+          setAdaptiveLoading(false);
         }
       } else {
-        const cleanS = answerText.toLowerCase().trim();
-        const cleanE = String(expected).toLowerCase().trim();
-        wasCorrect = cleanS === cleanE || (cleanE.length > 3 && cleanS.includes(cleanE));
+        const answerText = (openAnswers[currentQuestion.id] || '').trim();
+        if (!answerText) {
+          setAdaptiveError('Please enter an answer first.');
+          return;
+        }
+        setAdaptiveError('');
+        setAdaptiveLoading(true);
+
+        try {
+          const response = await fetch('/api/answer-adaptive-question-open', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              session_id: adaptiveSessionId,
+              question_number: currentQuestion.id,
+              student_answer: answerText,
+            }),
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || 'Could not process the answer.');
+          }
+
+          const data = await response.json();
+          const wasCorrect = Boolean(data.was_correct);
+
+          setAnsweredCorrectly((prev) => ({
+            ...prev,
+            [currentQuestion.id]: wasCorrect,
+          }));
+
+          setOpenFeedback((prev) => ({
+            ...prev,
+            [currentQuestion.id]: data.feedback || data.explanation || '',
+          }));
+
+          setFeedbackState((prev) => ({
+            ...prev,
+            [currentQuestion.id]: {
+              isChecked: true,
+              wasCorrect,
+              explanation: data.explanation || data.feedback || (wasCorrect ? 'Correct!' : 'Incorrect.'),
+              sourceLocator: data.source_locator || currentQuestion.sourceLocator || '',
+            },
+          }));
+
+          setPendingNextQuestion(data);
+        } catch (err: any) {
+          console.error('Open-answer question error:', err);
+          setAdaptiveError(err?.message || 'Error processing answer.');
+        } finally {
+          setAdaptiveLoading(false);
+        }
       }
+    } else {
+      // Non-adaptive static quiz fallback
+      if (isMcqQuestion) {
+        const selected = selectedAnswers[currentQuestion.id];
+        if (selected === undefined || selected === null) {
+          setAdaptiveError('Please select an option first.');
+          return;
+        }
+        setAdaptiveError('');
+        const wasCorrect = selected === currentQuestion.correctAnswerIndex;
+        let misconception: string | null = null;
+        const bq = currentQuestion.backendQuestion as any;
+        if (bq?.options && Array.isArray(bq.options)) {
+          misconception = bq.options[selected]?.misconception_tag || null;
+        }
+        const explanation =
+          currentQuestion.explanation ||
+          bq?.explanation ||
+          currentQuestion.hint ||
+          (wasCorrect
+            ? 'Great job! Your answer matches the source concept.'
+            : 'Review the cited source below to master this concept.');
+        const sourceLocator = currentQuestion.sourceLocator || bq?.source_locator || '';
 
-      const explanation = bq?.explanation || (wasCorrect ? `Correct! Expected: ${expected}` : `Expected: ${expected}`);
-      const sourceLocator = currentQuestion.sourceLocator || bq?.source_locator || '';
+        setFeedbackState((prev) => ({
+          ...prev,
+          [currentQuestion.id]: {
+            isChecked: true,
+            wasCorrect,
+            explanation,
+            misconception,
+            sourceLocator,
+          },
+        }));
+        setAnsweredCorrectly((prev) => ({
+          ...prev,
+          [currentQuestion.id]: wasCorrect,
+        }));
+      } else {
+        const answerText = (openAnswers[currentQuestion.id] || '').trim();
+        if (!answerText) {
+          setAdaptiveError('Please enter an answer first.');
+          return;
+        }
+        setAdaptiveError('');
+        const bq = currentQuestion.backendQuestion as any;
+        const expected = bq?.expected_answer || '';
+        let wasCorrect = false;
 
-      setFeedbackState((prev) => ({
-        ...prev,
-        [currentQuestion.id]: {
-          isChecked: true,
-          wasCorrect,
-          explanation,
-          sourceLocator,
-        },
-      }));
+        if (currentQuestion.questionType === 'numerical') {
+          const numStudent = parseFloat(answerText.replace(/,/g, ''));
+          const numExpected = parseFloat(String(expected).replace(/,/g, ''));
+          const tol = bq?.numerical_tolerance || 0.05;
+          if (!isNaN(numStudent) && !isNaN(numExpected)) {
+            wasCorrect = Math.abs(numStudent - numExpected) <= Math.max(tol, 0.01 * Math.abs(numExpected));
+          }
+        } else {
+          const cleanS = answerText.toLowerCase().trim();
+          const cleanE = String(expected).toLowerCase().trim();
+          wasCorrect = cleanS === cleanE || (cleanE.length > 3 && cleanS.includes(cleanE));
+        }
 
-      setAnsweredCorrectly((prev) => ({
-        ...prev,
-        [currentQuestion.id]: wasCorrect,
-      }));
+        const explanation = bq?.explanation || (wasCorrect ? `Correct! Expected: ${expected}` : `Expected: ${expected}`);
+        const sourceLocator = currentQuestion.sourceLocator || bq?.source_locator || '';
+
+        setFeedbackState((prev) => ({
+          ...prev,
+          [currentQuestion.id]: {
+            isChecked: true,
+            wasCorrect,
+            explanation,
+            sourceLocator,
+          },
+        }));
+        setAnsweredCorrectly((prev) => ({
+          ...prev,
+          [currentQuestion.id]: wasCorrect,
+        }));
+      }
     }
   };
 
@@ -679,414 +803,79 @@ export const ActiveQuizView: React.FC<
   // ADAPTIVE NEXT QUESTION
   // ----------------------------------------------------------
 
-  const handleAdaptiveNext =
-    async () => {
+  const handleAdaptiveNext = () => {
+    if (!pendingNextQuestion) return;
 
-      if (!adaptiveSessionId) {
-        return;
-      }
+    const data = pendingNextQuestion;
+    setPendingNextQuestion(null);
 
+    if (data.completed) {
+      finishQuiz(questions);
+      return;
+    }
 
-      const selected =
-        selectedAnswers[
-          currentQuestion.id
-        ];
+    const raw = data.question;
+    const rawOptions = Array.isArray(raw?.options) ? raw.options : [];
+    const options = rawOptions
+      .map((option: any) =>
+        typeof option === 'string' ? option : option?.text || ''
+      )
+      .filter((option: string) => option.trim().length > 0);
 
+    const correctAnswerIndex = rawOptions.findIndex(
+      (option: any) =>
+        option?.is_correct === true ||
+        option?.isCorrect === true ||
+        option?.correct === true
+    );
 
-      if (
-        selected ===
-          null ||
-        selected ===
-          undefined
-      ) {
+    const nextIsMcq = !raw?.question_type || raw.question_type === 'mcq';
 
-        setAdaptiveError(
-          'Please select an answer before continuing.'
-        );
+    if (
+      !raw?.question_text ||
+      (nextIsMcq && (options.length !== 4 || correctAnswerIndex < 0))
+    ) {
+      setAdaptiveError('The backend returned an invalid next question.');
+      return;
+    }
 
-        return;
-      }
-
-
-      setAdaptiveError('');
-      setAdaptiveLoading(true);
-
-
-      try {
-
-        const response =
-          await fetch(
-            '/api/answer-adaptive-question',
-            {
-              method: 'POST',
-
-              headers: {
-                'Content-Type':
-                  'application/json',
-              },
-
-              body: JSON.stringify({
-                session_id:
-                  adaptiveSessionId,
-
-                question_number:
-                 currentQuestion.id,
-
-                selected_option_index:
-                  selected,
-              }),
-            }
-          );
-
-
-        if (!response.ok) {
-
-          const text =
-            await response.text();
-
-          let message =
-            'Could not process the answer.';
-
-          try {
-
-            const parsed =
-              JSON.parse(text);
-
-            message =
-              parsed?.detail ||
-              message;
-
-          } catch {
-            if (text) {
-              message = text;
-            }
-          }
-
-          throw new Error(
-            message
-          );
-        }
-
-
-        const data =
-          await response.json();
-
-
-        console.log(
-          'Adaptive answer result:',
-          data
-        );
-
-
-        // ----------------------------------------------------
-        // LAST QUESTION
-        // ----------------------------------------------------
-
-        if (
-          data.completed
-        ) {
-
-          finishQuiz(
-            questions
-          );
-
-          return;
-        }
-
-
-        // ----------------------------------------------------
-        // NEXT QUESTION
-        // ----------------------------------------------------
-
-        const raw =
-          data.question;
-
-
-        const rawOptions =
-          Array.isArray(
-            raw?.options
-          )
-            ? raw.options
-            : [];
-
-
-        const options =
-          rawOptions
-            .map(
-              (option: any) =>
-                typeof option ===
-                'string'
-                  ? option
-                  : option?.text ||
-                    ''
-            )
-            .filter(
-              (option: string) =>
-                option.trim()
-                  .length > 0
-            );
-
-
-        const correctAnswerIndex =
-          rawOptions.findIndex(
-            (option: any) =>
-              option?.is_correct ===
-                true ||
-              option?.isCorrect ===
-                true ||
-              option?.correct ===
-                true
-          );
-
-
-        const nextIsMcq =
-          !raw?.question_type ||
-          raw.question_type === 'mcq';
-
-        if (
-          !raw?.question_text ||
-          (nextIsMcq &&
-            (options.length !== 4 ||
-              correctAnswerIndex < 0))
-        ) {
-
-          throw new Error(
-            'The backend returned an invalid next question.'
-          );
-        }
-
-
-        const nextQuestion:
-          Question = {
-
-          id:
-           currentQuestion.id + 1,
-
-          question:
-            raw.question_text,
-
-          options,
-
-          correctAnswerIndex,
-
-          hint: '',
-
-          explanation: '',
-
-          concept:
-            data.next_concept,
-
-          difficulty:
-            String(
-              data.next_difficulty ||
-                'medium'
-            ).replace(
-              /^./,
-              (c) =>
-                c.toUpperCase()
-            ) as
-              | 'Easy'
-              | 'Medium'
-              | 'Hard',
-
-          questionType:
-            raw.question_type || 'mcq',
-
-          topic: raw.topic,
-
-          sourceLocator:
-            raw.source_locator,
-
-          backendQuestion: raw,
-        };
-
-        setSelectedAnswers(
-  (prev) => {
-    const next = {
-      ...prev,
+    const nextQuestion: Question = {
+      id: currentQuestion.id + 1,
+      question: raw.question_text,
+      options,
+      correctAnswerIndex,
+      hint: '',
+      explanation: '',
+      concept: data.next_concept,
+      difficulty: String(
+        data.next_difficulty || 'medium'
+      ).replace(/^./, (c) => c.toUpperCase()) as
+        | 'Easy'
+        | 'Medium'
+        | 'Hard',
+      questionType: raw.question_type || 'mcq',
+      topic: raw.topic,
+      sourceLocator: raw.source_locator,
+      backendQuestion: raw,
     };
 
-    delete next[
-      nextQuestion.id
-    ];
+    setSelectedAnswers((prev) => {
+      const next = { ...prev };
+      delete next[nextQuestion.id];
+      return next;
+    });
 
-    return next;
-  }
-);
+    setOpenAnswers((prev) => {
+      const next = { ...prev };
+      delete next[nextQuestion.id];
+      return next;
+    });
 
+    setQuestions((prev) => [...prev, nextQuestion]);
+    setCurrentQuestionIndex((prev) => prev + 1);
+  };
 
-        setQuestions(
-          (prev) => [
-            ...prev,
-            nextQuestion,
-          ]
-        );
-
-
-        setCurrentQuestionIndex(
-          (prev) => prev + 1
-        );
-
-      } catch (error) {
-
-        console.error(
-          'Adaptive question error:',
-          error
-        );
-
-        setAdaptiveError(
-          error instanceof Error
-            ? error.message
-            : 'Could not load the next question.'
-        );
-
-      } finally {
-
-        setAdaptiveLoading(
-          false
-        );
-      }
-    };
-
-
-  // ----------------------------------------------------------
-  // ADAPTIVE NEXT (OPEN-ENDED: short-answer / numerical)
-  // ----------------------------------------------------------
-
-  const handleOpenAnswerSubmit =
-    async () => {
-
-      if (!adaptiveSessionId) {
-        return;
-      }
-
-      const answerText =
-        (openAnswers[currentQuestion.id] || '').trim();
-
-      if (!answerText) {
-        setAdaptiveError(
-          'Please enter an answer before continuing.'
-        );
-        return;
-      }
-
-      setAdaptiveError('');
-      setAdaptiveLoading(true);
-
-      try {
-
-        const response = await fetch(
-          '/api/answer-adaptive-question-open',
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              session_id: adaptiveSessionId,
-              question_number: currentQuestion.id,
-              student_answer: answerText,
-            }),
-          }
-        );
-
-        if (!response.ok) {
-          const text = await response.text();
-          let message = 'Could not process the answer.';
-          try {
-            const parsed = JSON.parse(text);
-            message = parsed?.detail || message;
-          } catch {
-            if (text) message = text;
-          }
-          throw new Error(message);
-        }
-
-        const data = await response.json();
-
-        setAnsweredCorrectly((prev) => ({
-          ...prev,
-          [currentQuestion.id]: Boolean(data.was_correct),
-        }));
-
-        setOpenFeedback((prev) => ({
-          ...prev,
-          [currentQuestion.id]: data.feedback || '',
-        }));
-
-        if (data.completed) {
-          finishQuiz(questions);
-          return;
-        }
-
-        const raw = data.question;
-
-        const rawOptions = Array.isArray(raw?.options)
-          ? raw.options
-          : [];
-
-        const options = rawOptions
-          .map((option: any) =>
-            typeof option === 'string' ? option : option?.text || ''
-          )
-          .filter((option: string) => option.trim().length > 0);
-
-        const correctAnswerIndex = rawOptions.findIndex(
-          (option: any) =>
-            option?.is_correct === true ||
-            option?.isCorrect === true ||
-            option?.correct === true
-        );
-
-        if (!raw?.question_text) {
-          throw new Error(
-            'The backend returned an invalid next question.'
-          );
-        }
-
-        const nextQuestion: Question = {
-          id: currentQuestion.id + 1,
-          question: raw.question_text,
-          options,
-          correctAnswerIndex,
-          hint: '',
-          explanation: '',
-          concept: data.next_concept,
-          difficulty: String(
-            data.next_difficulty || 'medium'
-          ).replace(/^./, (c) => c.toUpperCase()) as
-            | 'Easy'
-            | 'Medium'
-            | 'Hard',
-          questionType: raw.question_type || 'mcq',
-          topic: raw.topic,
-          sourceLocator: raw.source_locator,
-          backendQuestion: raw,
-        };
-
-        setOpenAnswers((prev) => {
-          const next = { ...prev };
-          delete next[nextQuestion.id];
-          return next;
-        });
-
-        setQuestions((prev) => [...prev, nextQuestion]);
-        setCurrentQuestionIndex((prev) => prev + 1);
-
-      } catch (error) {
-
-        console.error('Open-answer question error:', error);
-
-        setAdaptiveError(
-          error instanceof Error
-            ? error.message
-            : 'Could not load the next question.'
-        );
-
-      } finally {
-        setAdaptiveLoading(false);
-      }
-    };
+  const handleOpenAnswerSubmit = handleAdaptiveNext;
 
 
   // ----------------------------------------------------------

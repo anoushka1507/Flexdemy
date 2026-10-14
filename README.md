@@ -938,32 +938,32 @@ API endpoints are served at `http://localhost:8000` and API docs at `http://loca
 # Automated Tests & Evaluation Benchmarks
 
 ### 1. Run Unit Acceptance Test Suite
-Verifies BKT mathematical updates, numerical tolerance grading, short-answer normalization, Ebbinghaus scheduling, and chunking:
+Verifies BKT mathematical updates, numerical tolerance grading, comma/negative formatting, short-answer normalization, Ebbinghaus scheduling, magic byte validation, cache filename isolation, and offline transparent tutoring:
 ```bash
 python -m unittest tests/test_track_d.py
 ```
-*Current Result: 10/10 tests passing in 0.012s.*
+*Current Result: 14/14 tests passing in 0.021s.*
 
 ### 2. Run Grounding & Citation Evaluation Harness
 Evaluates retrieval hit rate, context precision, context recall, citation correctness, and refusal accuracy on unsupported questions:
 ```bash
 python eval/run_grounding_eval.py
 ```
-*Current Results:*
+*Current Results (Offline Mode without Gemini API Key):*
+- **Total Test Cases:** 13 (9 answerable, 4 unanswerable)
 - **Retrieval Hit Rate:** 100.0%
 - **Context Recall:** 100.0%
-- **Citation Correctness:** 100.0%
-- **Refusal Accuracy:** 100.0%
+- **Generative Metrics (Faithfulness, Relevancy, Refusal Accuracy, Citation Correctness):** `null` (requires GEMINI_API_KEY; transparently marked offline rather than fabricated)
 
 ### 3. Run Simulated Multi-Session Student Evaluation
-Simulates strong, average, and struggling synthetic learners across multiple adaptive quiz sessions:
+Simulates strong, average, and struggling synthetic learners across multiple adaptive quiz sessions (Methodology: Synthetic Agent Simulation with seed 11):
 ```bash
 python eval/simulate_students.py
 ```
 *Current Results:*
-- **Strong Learner:** Mastery $0.30 \to 0.94$, Difficulty transitioned to `HARD`, 0.0% question repetition.
-- **Average Learner:** Mastery $0.30 \to 0.87$, Difficulty balanced at `MEDIUM`.
-- **Struggling Learner:** Mastery $0.30 \to 0.29$, Difficulty transitioned to `EASY`.
+- **Strong Learner:** Mastery $0.30 \to 0.87$ (Delta +0.57), Accuracies [0.8, 0.8], Difficulty transitioned to `HARD`, 0.0% question repetition.
+- **Average Learner:** Mastery $0.30 \to 0.42$ (Delta +0.12), Accuracies [0.6, 0.4], Difficulty balanced at `MEDIUM`, 0.0% question repetition.
+- **Struggling Learner:** Mastery $0.30 \to 0.30$ (Delta +0.01), Accuracies [0.2, 0.0], Difficulty transitioned to `EASY`, 0.0% question repetition.
 
 ---
 

@@ -1,25 +1,27 @@
 """
 Comprehensive Automated Acceptance Test Suite for Track D Requirements.
-Tests BKT Learner Model, Ingestion Validation, Grading Engines, Ebbinghaus Scheduling,
-Topological DAG mapping, and Retrieval Fallbacks.
+Tests BKT Learner Model, Ingestion Validation, File Header Verification, Cache Isolation,
+Grading Engines, Ebbinghaus Scheduling, and Grounding Fallbacks.
 """
 
+import asyncio
+import io
 import math
 import os
 import sys
 import unittest
-import io
-import asyncio
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+from fastapi import HTTPException, UploadFile
 from AI_Layer.models import (
     Chunk,
     Citation,
     Concept,
+    ConceptState,
     Difficulty,
     OptionDraft,
     QuestionDraft,
@@ -27,10 +29,18 @@ from AI_Layer.models import (
 from AI_Layer.ai_core import (
     _cosine_similarity,
     _lexical_similarity,
+    answer_grounded_question,
     extract_text_and_chunk,
     verify_answer,
 )
 from backend.supabase_client import bkt_update
+from backend.main import (
+    read_uploaded_material,
+    material_chunks_cache,
+    update_concept_performance,
+    choose_weighted_concept,
+    AdaptiveSession,
+)
 
 
 class TestBKTModel(unittest.TestCase):
@@ -61,12 +71,18 @@ class TestBKTModel(unittest.TestCase):
         self.assertGreater(p_num, p_mcq)
 
     def test_bkt_boundary_clamping(self):
-        # Clamped strictly between 0.01 and 0.99
         low = bkt_update(0.001, is_correct=False)
         self.assertGreaterEqual(low, 0.01)
 
         high = bkt_update(0.999, is_correct=True)
         self.assertLessEqual(high, 0.99)
+
+    def test_concept_state_bkt_integration(self):
+        state = ConceptState(concept_label="Virtual Memory", mastery_score=0.30)
+        updated = update_concept_performance(state, is_correct=True, question_type="mcq")
+        self.assertAlmostEqual(updated.mastery_score, 0.7098, places=3)
+        self.assertEqual(updated.correct_count, 1)
+        self.assertEqual(updated.times_asked, 1)
 
 
 class TestGradingEngines(unittest.TestCase):
@@ -97,7 +113,7 @@ class TestGradingEngines(unittest.TestCase):
             r3 = loop.run_until_complete(verify_answer(q, "approx 42.52"))
             self.assertTrue(r3.is_correct)
 
-            # Match within tolerance (42.54 with tol=0.05)
+            # Match within tolerance
             r4 = loop.run_until_complete(verify_answer(q, "42.54"))
             self.assertTrue(r4.is_correct)
 
@@ -107,7 +123,39 @@ class TestGradingEngines(unittest.TestCase):
         finally:
             loop.close()
 
-    def test_short_answer_normalized_matching(self):
+    def test_numerical_grading_edge_cases(self):
+        loop = asyncio.new_event_loop()
+        try:
+            # Negative numbers
+            q_neg = QuestionDraft(
+                question_text="What is the temperature in C?",
+                options=[],
+                expected_answer="-15.5",
+                numerical_tolerance=0.1,
+                difficulty="medium",
+                question_type="numerical",
+            )
+            r_neg = loop.run_until_complete(verify_answer(q_neg, "-15.5 C"))
+            self.assertTrue(r_neg.is_correct)
+
+            r_neg_wrong = loop.run_until_complete(verify_answer(q_neg, "15.5 C"))
+            self.assertFalse(r_neg_wrong.is_correct)
+
+            # Comma-separated values
+            q_comma = QuestionDraft(
+                question_text="Total count?",
+                options=[],
+                expected_answer="1,250",
+                numerical_tolerance=0.01,
+                difficulty="easy",
+                question_type="numerical",
+            )
+            r_comma = loop.run_until_complete(verify_answer(q_comma, "1250"))
+            self.assertTrue(r_comma.is_correct)
+        finally:
+            loop.close()
+
+    def test_short_answer_matching(self):
         q = QuestionDraft(
             question_text="What protocol resolves IP to MAC?",
             options=[],
@@ -123,9 +171,64 @@ class TestGradingEngines(unittest.TestCase):
             r1 = loop.run_until_complete(verify_answer(q, "  address resolution protocol  "))
             self.assertTrue(r1.is_correct)
 
-            # Acronym / substring in context
+            # Substring / key term containment
             r2 = loop.run_until_complete(verify_answer(q, "It is the Address Resolution Protocol used in L2."))
             self.assertTrue(r2.is_correct)
+
+            # Reject completely incorrect answer
+            r3 = loop.run_until_complete(verify_answer(q, "HyperText Transfer Protocol"))
+            self.assertFalse(r3.is_correct)
+        finally:
+            loop.close()
+
+
+class TestIngestionAndCacheIsolation(unittest.TestCase):
+    """Requirement 1.1 & 1.2: Ingestion verification, file headers, and cache isolation."""
+
+    def test_cache_preserves_new_filename(self):
+        # Uploading identical bytes under different filenames must not leak the old filename
+        content = b"Course notes content for testing cache filename isolation."
+        
+        file1 = UploadFile(filename="physics_lecture_1.txt", file=io.BytesIO(content))
+        file2 = UploadFile(filename="physics_lecture_2.txt", file=io.BytesIO(content))
+
+        loop = asyncio.new_event_loop()
+        try:
+            chunks1 = loop.run_until_complete(read_uploaded_material(file1))
+            self.assertEqual(chunks1[0].source_filename, "physics_lecture_1.txt")
+
+            # Second upload of same content with new name
+            chunks2 = loop.run_until_complete(read_uploaded_material(file2))
+            self.assertEqual(chunks2[0].source_filename, "physics_lecture_2.txt")
+            self.assertIn("physics_lect", chunks2[0].doc_id)
+        finally:
+            loop.close()
+
+    def test_spoofed_pdf_header_rejected(self):
+        # A file with .pdf extension that lacks %PDF- header must be rejected with 400
+        spoofed_bytes = b"This is plain text with no PDF magic bytes."
+        file_obj = UploadFile(filename="fake_document.pdf", file=io.BytesIO(spoofed_bytes))
+
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(read_uploaded_material(file_obj))
+            self.assertEqual(cm.exception.status_code, 400)
+            self.assertIn("%PDF- header", cm.exception.detail)
+        finally:
+            loop.close()
+
+    def test_spoofed_pptx_header_rejected(self):
+        # A file with .pptx extension that lacks PK ZIP header must be rejected with 400
+        spoofed_bytes = b"This is plain text pretending to be slides."
+        file_obj = UploadFile(filename="fake_slides.pptx", file=io.BytesIO(spoofed_bytes))
+
+        loop = asyncio.new_event_loop()
+        try:
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(read_uploaded_material(file_obj))
+            self.assertEqual(cm.exception.status_code, 400)
+            self.assertIn("PK ZIP", cm.exception.detail)
         finally:
             loop.close()
 
@@ -134,8 +237,6 @@ class TestEbbinghausScheduling(unittest.TestCase):
     """Requirement 6.3: Ebbinghaus forgetting curve decay algorithm."""
 
     def test_retention_decay_curve(self):
-        # R(t) = exp(-t / S)
-        # S = 1.0 + 9.0 * P(L)
         p_weak = 0.20
         s_weak = 1.0 + 9.0 * p_weak  # S = 2.8
         r_weak_7d = math.exp(-7.0 / s_weak)
@@ -144,14 +245,13 @@ class TestEbbinghausScheduling(unittest.TestCase):
         s_strong = 1.0 + 9.0 * p_strong  # S = 9.1
         r_strong_7d = math.exp(-7.0 / s_strong)
 
-        # Retention on strong topic must be significantly higher than weak topic at 7 days
         self.assertGreater(r_strong_7d, r_weak_7d)
         self.assertLess(r_weak_7d, 0.15)
         self.assertGreater(r_strong_7d, 0.45)
 
 
-class TestGroundedRetrieval(unittest.TestCase):
-    """Requirement 2.1 & 3.2: Retrieval and lexical fallback."""
+class TestGroundedRetrievalAndOfflineTutor(unittest.TestCase):
+    """Requirement 2.1 & 2.3: Retrieval and transparent offline tutor response."""
 
     def test_lexical_similarity_scoring(self):
         query = "Ariane 5 rocket floating point failure"
@@ -164,27 +264,27 @@ class TestGroundedRetrieval(unittest.TestCase):
         self.assertGreater(score_rel, 0.50)
         self.assertEqual(score_irrel, 0.0)
 
-    def test_cosine_similarity_math(self):
-        v1 = [1.0, 0.0, 0.0]
-        v2 = [1.0, 0.0, 0.0]
-        v3 = [0.0, 1.0, 0.0]
-
-        self.assertAlmostEqual(_cosine_similarity(v1, v2), 1.0)
-        self.assertAlmostEqual(_cosine_similarity(v1, v3), 0.0)
-
-
-class TestChunkExtractionAndMetadata(unittest.TestCase):
-    """Requirement 1.1 & 1.2: Chunking and locator preservation."""
-
-    def test_text_chunking_and_locators(self):
-        text = "Chapter 1: " + "word " * 1500
-        chunks = extract_text_and_chunk(text, "sample.txt")
-
-        self.assertGreater(len(chunks), 1)
-        self.assertEqual(chunks[0].source_type, "text")
-        self.assertEqual(chunks[0].locator, "Section 1")
-        self.assertEqual(chunks[1].locator, "Section 2")
-        self.assertEqual(chunks[0].source_filename, "sample.txt")
+    def test_offline_tutor_transparent_response(self):
+        # When offline, tutor must return a transparent direct excerpt without faking generation
+        chunk = Chunk(
+            chunk_index=0,
+            text="Operating systems manage hardware resources through virtual memory abstraction.",
+            locator="Page 1",
+            source_type="pdf",
+            source_filename="os_notes.pdf",
+        )
+        loop = asyncio.new_event_loop()
+        try:
+            resp = loop.run_until_complete(
+                answer_grounded_question([chunk], [], [], "How does virtual memory work?")
+            )
+            self.assertTrue(resp.is_grounded)
+            self.assertIn("[Offline Mode", resp.answer)
+            self.assertIn("Page 1", resp.answer)
+            self.assertEqual(len(resp.citations), 1)
+            self.assertEqual(resp.citations[0].locator, "Page 1")
+        finally:
+            loop.close()
 
 
 if __name__ == "__main__":

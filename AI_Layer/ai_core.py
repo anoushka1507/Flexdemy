@@ -1538,8 +1538,40 @@ async def answer_grounded_question(
 ) -> GroundedChatResponse:
 
     if client is None:
-        raise QuestionGenerationError(
-            "Gemini client is not initialized."
+        top_matches = await retrieve_relevant_chunks(
+            chunks,
+            chunk_embeddings,
+            student_message,
+            k=3,
+        )
+        if not top_matches or top_matches[0][1] < 0.20:
+            return GroundedChatResponse(
+                answer=(
+                    "[Offline Retrieval Notice] No sufficiently relevant passages "
+                    "found in your uploaded material for this query."
+                ),
+                is_grounded=False,
+                citations=[],
+            )
+        best_chunk, best_score = top_matches[0]
+        return GroundedChatResponse(
+            answer=(
+                f"[Offline Mode — Direct Excerpt Retrieval]\n"
+                f"Generative AI synthesis is unavailable (GEMINI_API_KEY not configured). "
+                f"Relevant passage from your notes ({best_chunk.locator}):\n\n"
+                f'"{best_chunk.text[:300]}..."\n\n'
+                f"[Source: {best_chunk.locator}]"
+            ),
+            is_grounded=True,
+            citations=[
+                Citation(
+                    chunk_index=best_chunk.chunk_index,
+                    locator=best_chunk.locator,
+                    excerpt=best_chunk.text[:280],
+                    source_type=best_chunk.source_type,
+                    source_filename=best_chunk.source_filename,
+                )
+            ],
         )
 
     top_matches = await retrieve_relevant_chunks(
@@ -1691,8 +1723,20 @@ async def verify_answer(
             )
 
     if client is None:
-        raise QuestionGenerationError(
-            "Gemini client is not initialized."
+        student_words = set(w for w in re.findall(r"\w+", norm_student) if len(w) > 2)
+        expected_words = set(w for w in re.findall(r"\w+", norm_expected) if len(w) > 2)
+        overlap = len(student_words & expected_words)
+        recall = overlap / len(expected_words) if expected_words else 0.0
+        is_substantive = recall >= 0.50 or overlap >= 2
+        return AnswerVerification(
+            is_correct=is_substantive,
+            confidence=0.85 if is_substantive else 0.40,
+            feedback=(
+                f"Correct! Matches key terms from expected answer: {question.expected_answer}."
+                if is_substantive
+                else f"Incorrect. Expected answer: {question.expected_answer}."
+            ),
+            source_locator=question.source_locator,
         )
 
     prompt = (
