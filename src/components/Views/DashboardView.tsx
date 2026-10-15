@@ -24,6 +24,8 @@ interface DashboardViewProps {
   }>;
   onOpenUploadModal: () => void;
   onOpenCourseMap?: () => void;
+  learnerDataError?: string | null;
+  onRetryHydrate?: () => void;
 }
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
@@ -37,6 +39,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   weakTopics = [],
   onOpenUploadModal,
   onOpenCourseMap,
+  learnerDataError,
+  onRetryHydrate,
 }) => {
   const hasHistory = quizResults.length > 0 || recentHistory.length > 0;
 
@@ -133,6 +137,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </button>
         </div>
       </div>
+
+      {learnerDataError && (
+        <div className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 flex flex-col sm:flex-row items-center justify-between gap-3 text-rose-800 dark:text-rose-200">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-xl text-rose-600 dark:text-rose-400">
+              error
+            </span>
+            <span className="text-xs font-semibold">{learnerDataError}</span>
+          </div>
+          {onRetryHydrate && (
+            <button
+              onClick={onRetryHydrate}
+              className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors shadow-xs shrink-0"
+            >
+              Retry Loading History
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ========================================================
           STAT CARDS BENTO GRID

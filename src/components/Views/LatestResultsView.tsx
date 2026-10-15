@@ -44,9 +44,22 @@ export const LatestResultsView: React.FC<LatestResultsViewProps> = ({
       const response = await apiFetch('/api/quiz-history');
       if (!response.ok) {
         if (response.status === 401) {
+          if (isGuest) {
+            try {
+              const guestSaved = localStorage.getItem('flexdemy_guest_quiz_history');
+              if (guestSaved) {
+                const parsed = JSON.parse(guestSaved);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                  setAttempts(parsed);
+                  setLoading(false);
+                  return;
+                }
+              }
+            } catch {}
+          }
           setError('Sign in to view your completed quiz results and analytics.');
         } else {
-          setError('Could not retrieve quiz history. Please try again.');
+          setError('Could not retrieve quiz history from database. Please try again.');
         }
         return;
       }

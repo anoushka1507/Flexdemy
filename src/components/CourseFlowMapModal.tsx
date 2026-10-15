@@ -228,12 +228,28 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
 
       if (!response.ok) {
         let errMessage = `Could not analyze these files (${response.status}).`;
+        const statusCode = response.status;
         try {
           const errData = await response.json();
           if (errData && errData.detail) {
             errMessage = errData.detail;
           }
         } catch (_) {}
+
+        // If the collection was missing on the server (404), reset collectionId and queued state
+        // so that clicking 'Retry Concept Extraction' cleanly re-ingests without requiring the user to re-pick the file.
+        if (statusCode === 404 || errMessage.toLowerCase().includes('not found')) {
+          setCollectionId(null);
+          setFileQueue((prev) =>
+            prev.map((it) => ({
+              ...it,
+              status: 'queued',
+              stage: 'waiting',
+              progressPercent: 0,
+              error: undefined,
+            }))
+          );
+        }
         throw new Error(errMessage);
       }
 

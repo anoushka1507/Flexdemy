@@ -39,9 +39,9 @@ interface ActiveQuizViewProps {
   ) => void;
 
   onCompleteQuiz: (
-    result: QuizResult,
+    result: QuizResult & { questionOutcomes?: any[] },
     completedQuiz?: Quiz
-  ) => void;
+  ) => Promise<void> | void;
 }
 
 
@@ -660,7 +660,7 @@ export const ActiveQuizView: React.FC<
   // CREATE FINAL RESULT
   // ----------------------------------------------------------
 
-  const finishQuiz = (
+  const finishQuiz = async (
     finalQuestions: Question[],
     overrideAnsweredCorrectly?: Record<number, boolean>
   ) => {
@@ -779,7 +779,33 @@ export const ActiveQuizView: React.FC<
         })
       );
 
-    const result: QuizResult = {
+    const questionOutcomes = finalQuestions.map((q, idx) => {
+      const openResult = answeredMap[q.id];
+      const selected = selectedAnswers[q.id];
+      const isCorrect =
+        openResult !== undefined
+          ? openResult
+          : selected === q.correctAnswerIndex;
+
+      return {
+        question_number: idx + 1,
+        question_id: q.id,
+        question_text: q.question,
+        options: q.options || [],
+        selected_option_index: selected !== undefined ? selected : null,
+        selected_option_text: selected !== undefined && q.options ? q.options[selected] : null,
+        open_answer_text: openAnswers[q.id] || null,
+        correct_answer_index: q.correctAnswerIndex,
+        correct_answer_text: q.options && q.correctAnswerIndex !== undefined ? q.options[q.correctAnswerIndex] : null,
+        was_correct: Boolean(isCorrect),
+        explanation: q.explanation || null,
+        hint: q.hint || null,
+        concept: q.concept || quiz.topic,
+        source_locator: q.sourceLocator || null,
+      };
+    });
+
+    const result: QuizResult & { questionOutcomes?: any[] } = {
       quizId: quiz.id,
       quizTitle: quiz.title,
       scorePercentage,
@@ -797,6 +823,7 @@ export const ActiveQuizView: React.FC<
       openEndedResults:
         answeredMap,
       topicBreakdown,
+      questionOutcomes,
     };
 
     const completedQuiz: Quiz = {
@@ -807,15 +834,16 @@ export const ActiveQuizView: React.FC<
         finalQuestions.length,
     };
 
+    // Await database write confirmation before clearing state or completing
+    await onCompleteQuiz(
+      result,
+      completedQuiz
+    );
+
     try {
       localStorage.removeItem(`flexdemy_quiz_answers_${quiz.id}`);
       localStorage.removeItem(`flexdemy_quiz_open_${quiz.id}`);
     } catch {}
-
-    onCompleteQuiz(
-      result,
-      completedQuiz
-    );
   };
 
 
@@ -1096,11 +1124,11 @@ export const ActiveQuizView: React.FC<
         }
       }
 
-      finishQuiz(questions, updatedAnswered);
+      await finishQuiz(questions, updatedAnswered);
     } catch (err: any) {
       console.error('Error submitting quiz attempt:', err);
       setSubmitError(
-        err?.message || "We couldn't submit your quiz results. Your answers are saved — please click Finish Quiz to retry."
+        err?.message || "We couldn't save your quiz results to the database. Your answers are preserved — please click Finish Quiz to retry."
       );
       isSubmittingRef.current = false;
       hasSubmittedRef.current = false;
@@ -1236,14 +1264,11 @@ export const ActiveQuizView: React.FC<
 
           {!isAdaptive && (
             <button
-              onClick={() =>
-                finishQuiz(
-                  questions
-                )
-              }
-              className="bg-[#7372A5] text-white text-xs font-bold px-4 py-2 rounded-xl"
+              onClick={handleFinishQuiz}
+              disabled={isSubmitting}
+              className="bg-[#7372A5] hover:bg-[#5d5c8e] text-white text-xs font-bold px-4 py-2 rounded-xl transition-colors disabled:opacity-50"
             >
-              Submit Quiz
+              {isSubmitting ? 'Submitting…' : 'Submit Quiz'}
             </button>
           )}
 
