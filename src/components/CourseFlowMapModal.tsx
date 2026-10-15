@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { supabase } from '../supabaseClient';
 import { apiFetch } from '../utils/api';
+import { FileQueueItem } from '../types';
+import { MultiFileQueue } from './MultiFileQueue';
+import { uploadMaterialCollection } from '../utils/materialIngestion';
 
 interface ConceptNode {
   label: string;
@@ -27,7 +29,8 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
   onClose,
   onPracticeTopic,
 }) => {
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileQueue, setFileQueue] = useState<FileQueueItem[]>([]);
+  const [collectionId, setCollectionId] = useState<string | null>(null);
   const [concepts, setConcepts] = useState<ConceptNode[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -149,25 +152,40 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setSelectedFile(file);
+  const handleQueueChange = (newQueue: FileQueueItem[]) => {
+    setFileQueue(newQueue);
     setConcepts(null);
     setActiveConcept(null);
     setError('');
   };
 
+  const handleRetryItem = (failedItem: FileQueueItem) => {
+    setFileQueue((prev) =>
+      prev.map((it) =>
+        it.id === failedItem.id ? { ...it, status: 'queued', error: undefined } : it
+      )
+    );
+  };
+
   const handleGenerate = async () => {
-    if (!selectedFile) return;
+    if (fileQueue.length === 0) return;
 
     setLoading(true);
     setError('');
 
     try {
+      // 1. Batch ingest all files in the queue into a stable collection
+      const ingestResult = await uploadMaterialCollection(fileQueue, collectionId || undefined);
+      setFileQueue(ingestResult.items);
+      setCollectionId(ingestResult.collectionId);
+
+      if (ingestResult.succeeded === 0) {
+        throw new Error('All uploaded files failed processing. Please check file formats and sizes.');
+      }
+
+      // 2. Extract concepts and prerequisite relations across the collection
       const formData = new FormData();
-      formData.append('file', selectedFile);
+      formData.append('collection_id', ingestResult.collectionId);
 
       const response = await apiFetch('/api/extract-concepts', {
         method: 'POST',
@@ -175,7 +193,7 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
       });
 
       if (!response.ok) {
-        let errMessage = `Could not analyze this file (${response.status}).`;
+        let errMessage = `Could not analyze these files (${response.status}).`;
         try {
           const errData = await response.json();
           if (errData && errData.detail) {
@@ -295,25 +313,17 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
         {/* Content Body */}
         <div className="p-6 overflow-y-auto space-y-6 text-left">
           {!concepts && (
-            <div className="max-w-xl mx-auto space-y-4 py-8">
-              <div className="border-2 border-dashed border-[#d8d7e8] rounded-3xl p-8 text-center bg-[#f6f6fa] relative hover:border-[#7372A5] transition-all">
-                <input
-                  type="file"
-                  accept=".pdf,.txt,.md,.pptx,.mp4,.mov,.webm,.mkv"
-                  onChange={handleFileUpload}
-                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            <div className="max-w-xl mx-auto space-y-4 py-4">
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
+                  Course Materials (Multi-File Ingestion)
+                </label>
+                <MultiFileQueue
+                  items={fileQueue}
+                  onItemsChange={handleQueueChange}
+                  onRetryItem={handleRetryItem}
+                  disabled={loading}
                 />
-                <span className="material-symbols-outlined text-4xl text-[#7372A5] mb-2 block">
-                  upload_file
-                </span>
-                <p className="text-sm font-bold text-[#222138]">
-                  {selectedFile
-                    ? `Selected: ${selectedFile.name}`
-                    : 'Upload course notes, slides, or transcript to map'}
-                </p>
-                <p className="text-xs text-gray-400 mt-1">
-                  Extracts prerequisites, topological tiers, and BKT color-coding
-                </p>
               </div>
 
               {error && (
@@ -331,11 +341,11 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
               <div className="flex gap-2">
                 <button
                   onClick={handleGenerate}
-                  disabled={!selectedFile || loading}
+                  disabled={fileQueue.length === 0 || loading}
                   className="flex-1 py-3.5 rounded-2xl bg-[#7372A5] hover:bg-[#585785] text-white font-extrabold text-sm shadow-md disabled:opacity-50 transition-all flex items-center justify-center gap-2"
                 >
                   {loading ? (
-                    <span>Extracting Concepts & Prerequisites...</span>
+                    <span>Extracting Concepts Across Collection...</span>
                   ) : error ? (
                     <>
                       <span className="material-symbols-outlined text-sm">refresh</span>
@@ -344,18 +354,22 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                   ) : (
                     <>
                       <span className="material-symbols-outlined text-sm">hub</span>
-                      <span>Generate Course Prerequisite DAG</span>
+                      <span>
+                        Generate Course Prerequisite DAG{' '}
+                        {fileQueue.length > 0 ? `(${fileQueue.length} files)` : ''}
+                      </span>
                     </>
                   )}
                 </button>
-                {selectedFile && !loading && (
+                {fileQueue.length > 0 && !loading && (
                   <button
                     onClick={() => {
-                      setSelectedFile(null);
+                      setFileQueue([]);
+                      setCollectionId(null);
                       setError('');
                     }}
                     className="px-4 py-3.5 rounded-2xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 font-bold text-xs"
-                    title="Clear selected file"
+                    title="Clear selected files"
                   >
                     Clear
                   </button>
@@ -368,12 +382,13 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
             <div className="p-8 text-center space-y-3">
               <span className="material-symbols-outlined text-3xl text-gray-400">info</span>
               <p className="text-xs text-gray-500">
-                No distinct concepts could be extracted from this file.
+                No distinct concepts could be extracted from these files.
               </p>
               <button
                 onClick={() => {
                   setConcepts(null);
-                  setSelectedFile(null);
+                  setFileQueue([]);
+                  setCollectionId(null);
                 }}
                 className="text-xs font-bold text-[#7372A5] hover:underline"
               >
@@ -708,7 +723,7 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
               <button
                 onClick={() => {
                   setConcepts(null);
-                  setSelectedFile(null);
+                  setFileQueue([]);
                   setActiveConcept(null);
                 }}
                 className="text-xs font-bold text-[#7372A5] hover:underline"

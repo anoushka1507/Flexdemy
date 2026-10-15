@@ -7,7 +7,10 @@ export type ViewMode =
   | 'quizzes-list'
   | 'leaderboard'
   | 'analytics'
-  | 'settings';
+  | 'settings'
+  | 'profile';
+
+export type ThemeMode = 'light' | 'dark' | 'system';
 
 export type Difficulty =
   | 'Easy'
@@ -46,6 +49,45 @@ export interface Citation {
   locator: string;
   excerpt: string;
   sourceType: SourceType;
+  sourceFilename?: string;
+  collectionId?: string;
+  docId?: string;
+}
+
+export type QueueItemStatus = 'queued' | 'uploading' | 'completed' | 'partial' | 'failed' | 'skipped';
+
+export interface FileQueueItem {
+  id: string;
+  file: File;
+  name: string;
+  size: number;
+  format: 'pdf' | 'pptx' | 'text' | 'video' | 'unsupported';
+  status: QueueItemStatus;
+  progress?: number;
+  error?: string;
+  warnings?: string[];
+  docId?: string;
+  chunkCount?: number;
+  locatorSummary?: string;
+}
+
+export interface MaterialDocumentMetadata {
+  docId: string;
+  filename: string;
+  format: string;
+  sizeBytes: number;
+  chunkCount: number;
+  status: string;
+  locatorSummary?: string;
+  warnings?: string[];
+}
+
+export interface MaterialCollectionSummary {
+  collectionId: string;
+  name: string;
+  documents: MaterialDocumentMetadata[];
+  totalChunks: number;
+  updatedAt?: string;
 }
 
 export interface GroundedChatMessage {
@@ -107,14 +149,34 @@ export interface QuizResult {
 }
 
 export interface UserProfile {
+  id?: string;
   name: string;
   role: string;
   avatarUrl: string;
   email: string;
+  institution?: string;
+  courseProgram?: string;
+  studyGoal?: string;
+  bio?: string;
+  createdAt?: string;
   totalQuizzesAttempted: number;
   averageScore: number;
   bestScore: number;
   accuracy: number;
   streakDays: number;
   overallProgress: number;
+}
+
+export interface UserSettings {
+  theme: ThemeMode;
+  dyslexiaMode: boolean;
+  speechRate: number;
+  speechPitch: number;
+  reducedMotion: boolean;
+  fontSize: 'standard' | 'large';
+  explanationLanguage: 'english' | 'hindi';
+  explanationStyle: 'concise' | 'step-by-step' | 'example-first';
+  dailyStudyMinutes: number;
+  examDate?: string;
+  weakTopicInterval: 'daily' | 'before_quiz' | 'weekly';
 }

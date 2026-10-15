@@ -11,9 +11,12 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 
 import asyncio
+import datetime
+import hashlib
+import logging
 import os
 import random
-import logging
+import re
 import sys
 import uuid
 
@@ -59,12 +62,16 @@ if AI_LAYER_PATH not in sys.path:
 from AI_Layer.models import (
     AdaptiveQuizAnswerRequest,
     AdaptiveSession,
+    BatchIngestionResponse,
     ChatTurn,
     Chunk,
     Concept,
     ConceptDraft,
     ConceptState,
     Difficulty,
+    FileIngestionResult,
+    MaterialCollection,
+    MaterialDocument,
     QuestionType,
 )
 
@@ -73,17 +80,23 @@ from backend.supabase_client import (
     fetch_mastery,
     fetch_quiz_history,
     fetch_user_preferences,
+    fetch_user_profile,
     get_user_client,
     get_user_id,
+    list_user_collections,
     load_cached_material,
+    load_material_collection,
     load_quiz_material_data,
     load_quiz_session_data,
     record_asked_question,
     record_quiz_result,
+    reset_user_learning_data,
     save_cached_material,
+    save_material_collection,
     save_quiz_material_data,
     save_quiz_session_data,
     save_user_preferences,
+    save_user_profile,
     update_task_status,
     upsert_mastery,
 )
@@ -147,6 +160,10 @@ material_concepts_cache: dict[
     str,
     list[Any],
 ] = {}
+
+# In-memory collection store, keyed by collection_id.
+# Durable persistence via save_material_collection / Supabase.
+material_collections: dict[str, MaterialCollection] = {}
 
 # Session-level concurrency locks to prevent race conditions during answer submission
 _session_locks: dict[str, asyncio.Lock] = {}
@@ -252,6 +269,35 @@ async def get_material(
     if material is not None:
         return material
 
+    # 1. Check if session_id is directly a collection_id in-memory or in Supabase
+    col = material_collections.get(session_id)
+    if col is None:
+        raw_col = await load_material_collection(
+            session_id,
+            user_id=user_id,
+            auth_client=auth_client,
+        )
+        if raw_col:
+            try:
+                col = MaterialCollection.model_validate(raw_col)
+                material_collections[session_id] = col
+            except Exception as e:
+                logger.warning("Failed to deserialize collection %s: %s", session_id, e)
+
+    if col is not None:
+        first_doc = col.documents[0].filename if col.documents else "collection"
+        mat_dict = {
+            "chunks": col.all_chunks,
+            "source_filename": col.name or first_doc,
+            "collection_id": col.collection_id,
+            "user_id": col.user_id or user_id,
+            "embeddings": None,
+            "raw_bytes": None,
+        }
+        materials[session_id] = mat_dict
+        return mat_dict
+
+    # 2. Check quiz material persistence in Supabase
     data = await load_quiz_material_data(
         session_id,
         user_id=user_id,
@@ -265,6 +311,8 @@ async def get_material(
         data["chunks"] = [
             Chunk.model_validate(c) for c in data["chunks"]
         ]
+        if "embeddings" not in data:
+            data["embeddings"] = None
     except Exception as e:
         print("Failed to restore material from Supabase:", repr(e))
         return None
@@ -856,12 +904,431 @@ async def generate_question_api(
 
 
 # ============================================================
+# MULTI-FILE BATCH INGESTION (POST /ingest-collection)
+# ============================================================
+
+MAX_FILE_BYTES = 25 * 1024 * 1024  # 25 MB per-file upload limit
+SUPPORTED_EXTENSIONS = (
+    ".pdf", ".pptx", ".txt", ".md",
+    ".mp4", ".mov", ".webm", ".mkv",
+)
+
+
+@app.post("/ingest-collection", response_model=BatchIngestionResponse)
+async def ingest_collection_api(
+    files: list[UploadFile] = File(...),
+    collection_id: str = Form(""),
+    collection_name: str = Form(""),
+    authorization: str | None = Header(None),
+):
+    """
+    Unified multi-file batch ingestion endpoint.
+    Accepts multiple documents/videos, validates each file independently,
+    extracts chunks with exact provenance (collection_id, doc_id, filename,
+    locators, content_hash), deduplicates identical content, and durably persists
+    the normalized MaterialCollection in Supabase and memory.
+    """
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+    check_ai_rate_limit(user_id or "client")
+
+    if not files:
+        raise HTTPException(
+            status_code=400,
+            detail="No files provided for batch ingestion.",
+        )
+
+    clean_cid = collection_id.strip() if isinstance(collection_id, str) else ""
+    cid = clean_cid if clean_cid else f"col_{uuid.uuid4().hex[:12]}"
+    clean_cname = collection_name.strip() if isinstance(collection_name, str) else ""
+
+    # Load existing collection if appending, or create fresh
+    col = material_collections.get(cid)
+    if col is None:
+        raw_col = await load_material_collection(
+            cid,
+            user_id=user_id,
+            auth_client=sb_client,
+        )
+        if raw_col:
+            try:
+                col = MaterialCollection.model_validate(raw_col)
+                material_collections[cid] = col
+            except Exception as e:
+                logger.warning("Could not deserialize existing collection %s: %s", cid, e)
+
+    if col is None:
+        col = MaterialCollection(
+            collection_id=cid,
+            name=clean_cname,
+            user_id=user_id,
+        )
+    else:
+        # Enforce user ownership if user_id is established
+        if col.user_id and user_id and col.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized: you do not have permission to modify this collection.",
+            )
+        if clean_cname and not col.name:
+            col.name = clean_cname
+
+    file_results: list[FileIngestionResult] = []
+    succeeded = 0
+    failed = 0
+    skipped_duplicates = 0
+    all_new_chunks: list[Chunk] = []
+    global_warnings: list[str] = []
+
+    # Content hashes already present in this collection
+    existing_hashes: set[str] = {
+        d.content_hash for d in col.documents if d.content_hash
+    }
+    batch_hashes: set[str] = set()
+
+    for f in files:
+        raw_filename = f.filename or "uploaded_file"
+        clean_filename = os.path.basename(raw_filename)
+        ext = os.path.splitext(clean_filename.lower())[1]
+
+        # 1. Read file bytes
+        try:
+            file_bytes = await f.read()
+            await f.seek(0)
+        except Exception as e:
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    status="failed",
+                    error=f"Could not read upload stream: {e}",
+                )
+            )
+            failed += 1
+            continue
+
+        # 2. Empty file check
+        if not file_bytes or len(file_bytes) == 0:
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    size_bytes=0,
+                    status="failed",
+                    error="Uploaded file is empty (0 bytes). Please upload a valid document.",
+                )
+            )
+            failed += 1
+            continue
+
+        # 3. Size limit check
+        if len(file_bytes) > MAX_FILE_BYTES:
+            size_mb = len(file_bytes) / (1024 * 1024)
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    size_bytes=len(file_bytes),
+                    status="failed",
+                    error=(
+                        f"File size ({size_mb:.1f}MB) exceeds the maximum allowed limit of 25MB."
+                    ),
+                )
+            )
+            failed += 1
+            continue
+
+        # 4. Format validation
+        if ext == ".ppt" and not ext.endswith(".pptx"):
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    size_bytes=len(file_bytes),
+                    status="failed",
+                    error=(
+                        "Legacy PowerPoint (.ppt) format is not supported. "
+                        "Please export or convert to modern PowerPoint (.pptx) or PDF."
+                    ),
+                )
+            )
+            failed += 1
+            continue
+
+        if ext not in SUPPORTED_EXTENSIONS:
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    size_bytes=len(file_bytes),
+                    status="failed",
+                    error=(
+                        f"Unsupported file format '{ext}'. Flexdemy supports "
+                        "PDF (.pdf), modern PowerPoint (.pptx), Markdown/Text (.md, .txt), "
+                        "and lecture videos (.mp4, .mov, .webm, .mkv)."
+                    ),
+                )
+            )
+            failed += 1
+            continue
+
+        # 5. Deduplication check via SHA-256
+        content_hash = hashlib.sha256(file_bytes).hexdigest()
+        if content_hash in existing_hashes or content_hash in batch_hashes:
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    content_hash=content_hash,
+                    size_bytes=len(file_bytes),
+                    status="skipped_duplicate",
+                    cached=True,
+                    warnings=["Duplicate file content already ingested; skipped redundant processing."],
+                )
+            )
+            skipped_duplicates += 1
+            continue
+
+        batch_hashes.add(content_hash)
+
+        # 6. Extract chunks via format-specific pipeline
+        try:
+            chunks = await read_uploaded_material(
+                f,
+                user_id=user_id,
+                sb_client=sb_client,
+            )
+        except HTTPException as he:
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    content_hash=content_hash,
+                    size_bytes=len(file_bytes),
+                    status="failed",
+                    error=str(he.detail),
+                )
+            )
+            failed += 1
+            continue
+        except Exception as e:
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    content_hash=content_hash,
+                    size_bytes=len(file_bytes),
+                    status="failed",
+                    error=f"Extraction failed: {str(e)}",
+                )
+            )
+            failed += 1
+            continue
+
+        if not chunks:
+            file_results.append(
+                FileIngestionResult(
+                    filename=clean_filename,
+                    content_hash=content_hash,
+                    size_bytes=len(file_bytes),
+                    status="failed",
+                    error="No readable text, slides, or transcript could be extracted.",
+                )
+            )
+            failed += 1
+            continue
+
+        # 7. Stable Document ID & Provenance Normalization
+        name_clean = re.sub(r"[^a-zA-Z0-9_.-]", "_", clean_filename)[:24]
+        doc_id = f"doc_{content_hash[:8]}_{name_clean}"
+
+        doc_warnings: list[str] = []
+        is_partial = False
+        for c in chunks:
+            c.collection_id = cid
+            c.doc_id = doc_id
+            c.source_filename = clean_filename
+            c.content_hash = content_hash
+            c.mime_type = f.content_type or c.mime_type
+            if c.warnings:
+                doc_warnings.extend(c.warnings)
+            if c.extraction_status == "partial":
+                is_partial = True
+
+        # Locator summary (e.g. 'Page 1 - 24', 'Slide 1 - 15')
+        locators = [c.locator for c in chunks if c.locator]
+        if locators:
+            loc_summary = f"{locators[0]} – {locators[-1]}" if len(locators) > 1 else locators[0]
+        else:
+            loc_summary = f"{len(chunks)} chunks"
+
+        status_str = "partial" if is_partial else "completed"
+        unique_warnings = list(dict.fromkeys(doc_warnings))
+
+        material_doc = MaterialDocument(
+            doc_id=doc_id,
+            filename=clean_filename,
+            content_hash=content_hash,
+            mime_type=f.content_type or "application/octet-stream",
+            size_bytes=len(file_bytes),
+            chunk_count=len(chunks),
+            status=status_str,
+            warnings=unique_warnings,
+            locator_summary=loc_summary,
+        )
+        col.documents.append(material_doc)
+        existing_hashes.add(content_hash)
+        all_new_chunks.extend(chunks)
+        succeeded += 1
+
+        file_results.append(
+            FileIngestionResult(
+                filename=clean_filename,
+                doc_id=doc_id,
+                content_hash=content_hash,
+                mime_type=f.content_type or "application/octet-stream",
+                size_bytes=len(file_bytes),
+                chunk_count=len(chunks),
+                status=status_str,
+                warnings=unique_warnings,
+                locator_summary=loc_summary,
+                cached=False,
+            )
+        )
+
+    # 8. Merge and re-index all chunks across the collection
+    col.all_chunks.extend(all_new_chunks)
+    for idx, c in enumerate(col.all_chunks):
+        c.chunk_index = idx
+
+    # Set collection name if unset
+    if not col.name and col.documents:
+        if len(col.documents) == 1:
+            col.name = col.documents[0].filename
+        else:
+            col.name = f"{col.documents[0].filename} (+{len(col.documents)-1} files)"
+
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    if not col.created_at:
+        col.created_at = now_iso
+    col.updated_at = now_iso
+    if user_id:
+        col.user_id = user_id
+
+    # 9. Store in memory and persist in Supabase
+    material_collections[cid] = col
+    try:
+        await save_material_collection(
+            sb_client,
+            user_id,
+            col.model_dump(mode="json"),
+        )
+    except Exception as e:
+        logger.warning("save_material_collection error for %s: %s", cid, e)
+        global_warnings.append("Collection saved to memory, but database persistence failed.")
+
+    return BatchIngestionResponse(
+        collection_id=cid,
+        total_files=len(files),
+        succeeded=succeeded,
+        failed=failed,
+        skipped_duplicates=skipped_duplicates,
+        files=file_results,
+        concepts=[],
+        total_chunks=len(col.all_chunks),
+        warnings=global_warnings,
+    )
+
+
+@app.get("/collections")
+async def list_collections_api(
+    authorization: str | None = Header(None),
+):
+    """List collection metadata records belonging to the current user."""
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+
+    # 1. Fetch from durable Supabase store
+    persisted = await list_user_collections(user_id, auth_client=sb_client)
+
+    # 2. Merge with any active in-memory collections for this user
+    seen_ids = {row["collection_id"] for row in persisted if "collection_id" in row}
+    results = list(persisted)
+
+    for cid, c in material_collections.items():
+        if cid not in seen_ids and (not c.user_id or c.user_id == user_id):
+            results.append({
+                "collection_id": cid,
+                "name": c.name or (c.documents[0].filename if c.documents else "Untitled"),
+                "updated_at": c.updated_at,
+                "document_count": len(c.documents),
+                "total_chunks": len(c.all_chunks),
+                "user_id": c.user_id,
+            })
+
+    return {"collections": results}
+
+
+@app.get("/collections/{collection_id}")
+async def get_collection_api(
+    collection_id: str,
+    authorization: str | None = Header(None),
+):
+    """Retrieve full metadata, documents, and chunk counts for a collection."""
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+
+    col = material_collections.get(collection_id)
+    if col is None:
+        raw_col = await load_material_collection(
+            collection_id,
+            user_id=user_id,
+            auth_client=sb_client,
+        )
+        if raw_col:
+            try:
+                col = MaterialCollection.model_validate(raw_col)
+                material_collections[collection_id] = col
+            except Exception as e:
+                logger.warning("Failed to deserialize collection: %s", e)
+
+    if col is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Collection '{collection_id}' not found.",
+        )
+
+    if col.user_id and user_id and col.user_id != user_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Unauthorized: you do not have permission to view this collection.",
+        )
+
+    return col.model_dump(mode="json")
+
+
+@app.delete("/collections/{collection_id}")
+async def delete_collection_api(
+    collection_id: str,
+    authorization: str | None = Header(None),
+):
+    """Remove a collection from memory and persistence."""
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+
+    col = material_collections.pop(collection_id, None)
+
+    if sb_client and user_id:
+        try:
+            sb_client.table("material_collections").delete().eq(
+                "collection_id", collection_id
+            ).eq("user_id", user_id).execute()
+        except Exception as e:
+            logger.warning("Failed to delete collection from Supabase: %s", e)
+
+    return {"status": "deleted", "collection_id": collection_id}
+
+
+# ============================================================
 # CONCEPT EXTRACTION
 # ============================================================
 
 @app.post("/extract-concepts")
 async def extract_concepts_api(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+    collection_id: str | None = Form(None),
     authorization: str | None = Header(None),
 ):
 
@@ -875,57 +1342,95 @@ async def extract_concepts_api(
     from AI_Layer.exceptions import ConceptExtractionError, PDFProcessingError
     from AI_Layer.models import ConceptDraft
 
-    # 1. Ingestion & Validation
-    try:
-        chunks = await read_uploaded_material(
-            file,
-            user_id=user_id,
-            sb_client=sb_client,
-        )
-    except HTTPException:
-        raise
-    except PDFProcessingError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error("Failed to read uploaded material '%s': %s", file.filename, e, exc_info=True)
+    chunks: list[Chunk] = []
+    source_filename = "Uploaded Material"
+
+    # 1. Collection Mode
+    col_id = collection_id if isinstance(collection_id, str) else ""
+    if col_id and col_id.strip():
+        cid = col_id.strip()
+        col = material_collections.get(cid)
+        if col is None:
+            raw_col = await load_material_collection(cid, user_id=user_id, auth_client=sb_client)
+            if raw_col:
+                try:
+                    col = MaterialCollection.model_validate(raw_col)
+                    material_collections[cid] = col
+                except Exception as e:
+                    logger.warning("Error loading collection %s: %s", cid, e)
+        if col is None or not col.all_chunks:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Material collection '{cid}' not found or contains no extracted chunks.",
+            )
+        if col.user_id and user_id and col.user_id != user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Unauthorized: you do not have permission to access this collection.",
+            )
+        chunks = col.all_chunks
+        source_filename = col.name or f"Collection ({len(col.documents)} files)"
+
+    # 2. Single-File Mode (Legacy / direct upload)
+    elif file is not None:
+        source_filename = file.filename or "uploaded_material"
+        try:
+            chunks = await read_uploaded_material(
+                file,
+                user_id=user_id,
+                sb_client=sb_client,
+            )
+        except HTTPException:
+            raise
+        except PDFProcessingError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            logger.error("Failed to read uploaded material '%s': %s", file.filename, e, exc_info=True)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not read uploaded file '{file.filename}': {str(e)}",
+            )
+    else:
         raise HTTPException(
             status_code=400,
-            detail=f"Could not read uploaded file '{file.filename}': {str(e)}",
+            detail="Either a file upload or a collection_id must be provided.",
         )
 
     if not chunks:
         raise HTTPException(
             status_code=422,
-            detail=f"No readable text or slide content could be extracted from '{file.filename}'. Please check that the file is not empty or image-only without OCR.",
+            detail=f"No readable text or slide content could be extracted from '{source_filename}'. Please check that the file is not empty or image-only without OCR.",
         )
 
     # 2. Content Hash Cache Lookup (Instant response + 0 LLM tokens on re-extraction)
     content_hash = chunks[0].content_hash if (chunks and chunks[0].content_hash) else None
-    if content_hash:
+    cache_key = f"col_{col_id.strip()}" if (col_id and col_id.strip()) else content_hash
+    if cache_key:
         # Check in-memory concepts cache
-        if content_hash in material_concepts_cache:
-            cached_concepts = material_concepts_cache[content_hash]
+        if cache_key in material_concepts_cache:
+            cached_concepts = material_concepts_cache[cache_key]
             return {
-                "filename": file.filename,
+                "filename": source_filename,
                 "chunk_count": len(chunks),
                 "cached": True,
                 "concepts": [c.model_dump() for c in cached_concepts],
             }
 
         # Check durable Supabase cache
-        cached_durable = await load_cached_material(content_hash, user_id=user_id, auth_client=sb_client)
-        if cached_durable and cached_durable.get("concept_drafts"):
-            try:
-                loaded_drafts = [ConceptDraft.model_validate(cd) for cd in cached_durable["concept_drafts"]]
-                material_concepts_cache[content_hash] = loaded_drafts
-                return {
-                    "filename": file.filename,
-                    "chunk_count": len(chunks),
-                    "cached": True,
-                    "concepts": [c.model_dump() for c in loaded_drafts],
-                }
-            except Exception as e:
-                logger.warning("Failed to parse durable cached concepts: %s", e)
+        if content_hash:
+            cached_durable = await load_cached_material(content_hash, user_id=user_id, auth_client=sb_client)
+            if cached_durable and cached_durable.get("concept_drafts"):
+                try:
+                    loaded_drafts = [ConceptDraft.model_validate(cd) for cd in cached_durable["concept_drafts"]]
+                    material_concepts_cache[cache_key] = loaded_drafts
+                    return {
+                        "filename": source_filename,
+                        "chunk_count": len(chunks),
+                        "cached": True,
+                        "concepts": [c.model_dump() for c in loaded_drafts],
+                    }
+                except Exception as e:
+                    logger.warning("Failed to parse durable cached concepts: %s", e)
 
     # 3. Call Concept Extraction with safe diagnostic error codes
     try:
@@ -947,7 +1452,7 @@ async def extract_concepts_api(
             detail=f"Concept extraction provider error: {err_msg}",
         )
     except Exception as e:
-        logger.error("extract_concepts failed on '%s': %s", file.filename, e, exc_info=True)
+        logger.error("extract_concepts failed on '%s': %s", source_filename, e, exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Could not extract educational concepts from this document: {str(e)}",
@@ -960,20 +1465,21 @@ async def extract_concepts_api(
         )
 
     # 4. Save to in-memory & durable cache
+    if cache_key:
+        material_concepts_cache[cache_key] = concepts
     if content_hash:
-        material_concepts_cache[content_hash] = concepts
         await save_cached_material(
             content_hash=content_hash,
             chunks_json=[c.model_dump(mode="json") for c in chunks],
             concept_drafts_json=[c.model_dump(mode="json") for c in concepts],
-            content_type=file.content_type or "application/octet-stream",
-            filename=file.filename or "material",
+            content_type=(file.content_type if file else chunks[0].mime_type) or "application/octet-stream",
+            filename=source_filename,
             user_id=user_id,
             auth_client=sb_client,
         )
 
     return {
-        "filename": file.filename,
+        "filename": source_filename,
         "chunk_count": len(chunks),
         "cached": False,
         "concepts": [
@@ -989,7 +1495,9 @@ async def extract_concepts_api(
 
 @app.post("/start-adaptive-quiz")
 async def start_adaptive_quiz(
-    file: UploadFile = File(...),
+    file: UploadFile | None = File(None),
+
+    collection_id: str = Form(""),
 
     title: str = Form("Adaptive Quiz"),
 
@@ -1022,15 +1530,22 @@ async def start_adaptive_quiz(
     user_id = get_user_id(authorization)
     check_ai_rate_limit(user_id or "client")
 
+    title_raw = title if isinstance(title, str) else ""
+    q_types_raw = question_types if isinstance(question_types, str) else "mcq"
+    sel_topics_raw = selected_topics if isinstance(selected_topics, str) else ""
+    col_id_raw = collection_id if isinstance(collection_id, str) else ""
+    drafts_json_raw = concept_drafts_json if isinstance(concept_drafts_json, str) else ""
+    diagnostic_bool = bool(is_diagnostic) if not hasattr(is_diagnostic, "default") else False
+
     requested_types = [
         t.strip()
-        for t in question_types.split(",")
+        for t in q_types_raw.split(",")
         if t.strip() in ("mcq", "short_answer", "numerical")
     ] or ["mcq"]
 
     requested_topics = {
         t.strip().lower()
-        for t in selected_topics.split(",")
+        for t in sel_topics_raw.split(",")
         if t.strip()
     }
 
@@ -1052,73 +1567,88 @@ async def start_adaptive_quiz(
     try:
 
         # ----------------------------------------------------
-        # Read material.
+        # Read material (Collection mode or Legacy single file).
         # ----------------------------------------------------
+        chunks: list[Chunk] = []
+        raw_bytes = b""
+        material_filename = "Study Material"
+        material_mime = "application/octet-stream"
 
-        # Keep a copy of the original bytes so a citation can later
-        # open the actual source file (PDF page, video timestamp),
-        # not just show its locator as text.
-        raw_bytes = await file.read()
-        await file.seek(0)
-
-        chunks = await read_uploaded_material(
-            file,
-            user_id=user_id,
-            sb_client=sb_client,
-        )
-
-
-        if not chunks:
-
+        if col_id_raw and col_id_raw.strip():
+            cid = col_id_raw.strip()
+            col = material_collections.get(cid)
+            if col is None:
+                raw_col = await load_material_collection(cid, user_id=user_id, auth_client=sb_client)
+                if raw_col:
+                    try:
+                        col = MaterialCollection.model_validate(raw_col)
+                        material_collections[cid] = col
+                    except Exception as e:
+                        logger.warning("Error loading collection %s: %s", cid, e)
+            if col is None or not col.all_chunks:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Material collection '{cid}' not found or contains no chunks.",
+                )
+            if col.user_id and user_id and col.user_id != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Unauthorized: you do not have permission to access this collection.",
+                )
+            chunks = col.all_chunks
+            material_filename = col.name or f"Collection ({len(col.documents)} files)"
+            material_mime = "application/json"
+        elif file is not None:
+            raw_bytes = await file.read()
+            await file.seek(0)
+            chunks = await read_uploaded_material(
+                file,
+                user_id=user_id,
+                sb_client=sb_client,
+            )
+            material_filename = file.filename or "material"
+            material_mime = file.content_type or "application/octet-stream"
+        else:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    "No readable study material "
-                    "was found."
-                ),
+                detail="Either a file upload or a collection_id must be provided to start a quiz.",
             )
 
+        if not chunks:
+            raise HTTPException(
+                status_code=400,
+                detail="No readable study material was found.",
+            )
 
         # ----------------------------------------------------
         # Extract concepts (reuse a prior preview's drafts if the
         # frontend already called /extract-concepts for this file).
         # ----------------------------------------------------
-
-        if concept_drafts_json.strip():
-
+        if drafts_json_raw.strip():
             import json as _json
-
             try:
                 concept_drafts = [
                     ConceptDraft(**d)
-                    for d in _json.loads(concept_drafts_json)
+                    for d in _json.loads(drafts_json_raw)
                 ]
             except (ValueError, TypeError) as e:
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid concept_drafts_json: {e}",
                 )
-
         else:
-
-            import hashlib
-
-            file_hash = hashlib.sha256(raw_bytes).hexdigest()
-            cached_drafts = concept_extraction_cache.get(file_hash)
+            cache_key = f"col_{col_id_raw.strip()}" if col_id_raw.strip() else (
+                chunks[0].content_hash if (chunks and chunks[0].content_hash) else ""
+            )
+            cached_drafts = concept_extraction_cache.get(cache_key) or material_concepts_cache.get(cache_key)
 
             if cached_drafts is not None:
-
                 concept_drafts = cached_drafts
-
             else:
-
-                concept_drafts = (
-                    await extract_concepts(
-                        chunks
-                    )
-                )
-
-                concept_extraction_cache[file_hash] = concept_drafts
+                concept_drafts = await extract_concepts(chunks)
+                if cache_key:
+                    concept_extraction_cache[cache_key] = concept_drafts
+                    material_concepts_cache[cache_key] = concept_drafts
 
 
         concepts = (
@@ -1187,10 +1717,16 @@ async def start_adaptive_quiz(
             uuid.uuid4()
         )
 
+        quiz_title = (
+            title_raw.strip()
+            if (title_raw.strip() and title_raw.strip() != "Adaptive Quiz")
+            else ((file.filename if file and file.filename else material_filename) or "Adaptive Quiz")
+        )
+
         session = AdaptiveSession(
             session_id=session_id,
             user_id=user_id,
-            title=title,
+            title=quiz_title,
             total_questions=question_count,
             starting_difficulty=difficulty,
             current_difficulty=difficulty,
@@ -1199,7 +1735,7 @@ async def start_adaptive_quiz(
             concepts=concepts,
             concept_states=concept_states,
             question_types=requested_types,
-            is_diagnostic=is_diagnostic,
+            is_diagnostic=diagnostic_bool,
         )
 
 
@@ -1213,8 +1749,9 @@ async def start_adaptive_quiz(
                 "chunks": chunks,
                 "embeddings": None,
                 "raw_bytes": raw_bytes,
-                "content_type": file.content_type or "application/octet-stream",
-                "filename": file.filename or "material",
+                "content_type": material_mime,
+                "filename": material_filename,
+                "collection_id": col_id_raw.strip() if col_id_raw.strip() else None,
             },
             user_id=user_id,
             auth_client=sb_client,
@@ -1245,10 +1782,7 @@ async def start_adaptive_quiz(
 
             "session_id": session_id,
 
-            "title": (
-                file.filename
-                or "Adaptive Quiz"
-            ),
+            "title": quiz_title,
 
             "total_questions": (
                 question_count
@@ -1269,6 +1803,8 @@ async def start_adaptive_quiz(
             "question": (
                 question.model_dump()
             ),
+
+            "concepts": [c.model_dump() for c in concepts],
         }
 
 
@@ -1764,7 +2300,8 @@ SUPPORTED_STYLES = {"concise", "step-by-step", "example-first"}
 
 
 class GroundedChatRequest(BaseModel):
-    session_id: str
+    session_id: str = ""
+    collection_id: str = ""
     message: str
     history: list[ChatTurn] = []
     # "english" (default) or "hindi" (Hinglish explanation of the
@@ -1781,11 +2318,11 @@ async def grounded_chat_api(
     correlation_id = str(uuid.uuid4())[:8]
 
     # 1. Input Validation
-    clean_session_id = (request.session_id or "").strip()
-    if not clean_session_id:
+    target_id = (request.session_id or request.collection_id or "").strip()
+    if not target_id:
         raise HTTPException(
             status_code=400,
-            detail="Session ID is required and cannot be empty.",
+            detail="Session ID is required (or provide a collection_id) and cannot be empty.",
         )
 
     clean_message = (request.message or "").strip()
@@ -1817,19 +2354,19 @@ async def grounded_chat_api(
 
     # 2. Material Retrieval
     material = await get_material(
-        clean_session_id,
+        target_id,
         user_id=chat_user_id,
         auth_client=sb_client,
     )
 
     if material is None:
         logger.warning(
-            "[%s] Material not found for session %s (user: %s)",
-            correlation_id, clean_session_id, chat_user_id,
+            "[%s] Material not found for target %s (user: %s)",
+            correlation_id, target_id, chat_user_id,
         )
         raise HTTPException(
             status_code=404,
-            detail="No ingested material found for this quiz session. The session may have expired or been started without persistent storage.",
+            detail="No ingested material found for this quiz session or collection. It may have expired or been started without persistent storage.",
         )
 
     chunks = material.get("chunks", [])
@@ -1846,7 +2383,7 @@ async def grounded_chat_api(
                 [chunk.text for chunk in chunks]
             )
             await save_material(
-                clean_session_id,
+                target_id,
                 material,
                 user_id=chat_user_id,
                 auth_client=sb_client,
@@ -1894,7 +2431,7 @@ async def grounded_chat_api(
     if response.is_grounded and response.citations:
         try:
             session = await get_session(
-                clean_session_id,
+                target_id,
                 user_id=chat_user_id,
                 auth_client=sb_client,
             )
@@ -2024,7 +2561,8 @@ async def transcribe_audio_api(
 # ============================================================
 
 class FlashcardRequest(BaseModel):
-    session_id: str
+    session_id: str = ""
+    collection_id: str = ""
     topic: str
     count: int = 6
 
@@ -2044,8 +2582,15 @@ async def generate_flashcards_api(
         embed_texts,
     )
 
+    target_id = (request.session_id or request.collection_id or "").strip()
+    if not target_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Session ID or Collection ID is required.",
+        )
+
     material = await get_material(
-        request.session_id,
+        target_id,
         user_id=user_id,
         auth_client=sb_client,
     )
@@ -2053,7 +2598,7 @@ async def generate_flashcards_api(
     if material is None:
         raise HTTPException(
             status_code=404,
-            detail="No ingested material found for this session.",
+            detail="No ingested material found for this session or collection.",
         )
 
     chunks = material["chunks"]
@@ -2250,6 +2795,21 @@ class UserPreferencesPayload(BaseModel):
     daily_minutes: int | None = None
     saved_schedule: dict | None = None
     completed_tasks: list[str] | None = None
+    theme: str | None = None
+    speech_rate: float | None = None
+    speech_pitch: float | None = None
+    reduced_motion: bool | None = None
+    font_size: str | None = None
+    weak_topic_interval: str | None = None
+
+
+class UserProfilePayload(BaseModel):
+    display_name: str | None = None
+    avatar_url: str | None = None
+    study_goal: str | None = None
+    course_program: str | None = None
+    institution: str | None = None
+    bio: str | None = None
 
 
 @app.get("/user-preferences")
@@ -2283,6 +2843,53 @@ async def save_user_preferences_api(
     return {"saved": saved}
 
 
+@app.get("/user-profile")
+async def get_user_profile_api(
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id or not sb_client:
+        return {"profile": None}
+
+    profile = await fetch_user_profile(sb_client, user_id)
+    return {"profile": profile}
+
+
+@app.post("/user-profile")
+async def save_user_profile_api(
+    payload: UserProfilePayload,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id or not sb_client:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to save your profile.",
+        )
+
+    data = {k: v for k, v in payload.model_dump().items() if v is not None}
+    saved = await save_user_profile(sb_client, user_id, data)
+    return {"saved": saved}
+
+
+@app.post("/reset-learning-data")
+async def reset_learning_data_api(
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id or not sb_client:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to reset your learning data.",
+        )
+
+    cleared = await reset_user_learning_data(sb_client, user_id)
+    return {"cleared": cleared}
+
+
 @app.get("/learner-profile")
 async def get_learner_profile_api(
     authorization: str | None = Header(None),
@@ -2304,6 +2911,9 @@ async def get_learner_profile_api(
     # 3. Fetch preferences
     prefs = await fetch_user_preferences(sb_client, user_id)
 
+    # 4. Fetch profile
+    profile = await fetch_user_profile(sb_client, user_id)
+
     # Calculate aggregate stats
     total_quizzes = len(history)
     avg_score = round(sum(h.get("score_percentage", 0) for h in history) / total_quizzes, 1) if total_quizzes > 0 else 0
@@ -2321,6 +2931,7 @@ async def get_learner_profile_api(
 
     return {
         "user_id": user_id,
+        "profile": profile,
         "stats": {
             "total_quizzes": total_quizzes,
             "average_score": avg_score,

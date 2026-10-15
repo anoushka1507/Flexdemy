@@ -1614,6 +1614,8 @@ async def answer_grounded_question(
                     excerpt=best_chunk.text[:280],
                     source_type=best_chunk.source_type,
                     source_filename=best_chunk.source_filename,
+                    collection_id=best_chunk.collection_id,
+                    doc_id=best_chunk.doc_id,
                 )
             ],
         )
@@ -1737,6 +1739,8 @@ async def answer_grounded_question(
             excerpt=chunk.text[:280],
             source_type=chunk.source_type,
             source_filename=chunk.source_filename,
+            collection_id=chunk.collection_id,
+            doc_id=chunk.doc_id,
         )
         for chunk, _score in used_chunks
     ]

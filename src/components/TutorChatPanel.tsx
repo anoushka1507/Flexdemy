@@ -358,6 +358,9 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
             locator: c.locator,
             excerpt: c.excerpt,
             sourceType: c.source_type || 'text',
+            sourceFilename: c.source_filename,
+            collectionId: c.collection_id,
+            docId: c.doc_id,
           })),
         },
       ]);
@@ -614,6 +617,8 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
                       const pillClass =
                         'inline-flex items-center gap-1 text-[10px] font-semibold text-[#7372A5] bg-white px-2 py-0.5 rounded-full border border-[#d8d7e8] transition-colors';
 
+                      const citationLabel = c.sourceFilename ? `${c.sourceFilename} • ${c.locator}` : c.locator;
+
                       if (jumpUrl) {
                         return (
                           <a
@@ -622,22 +627,22 @@ export const TutorChatPanel: React.FC<TutorChatPanelProps> = ({
                             target="_blank"
                             rel="noreferrer"
                             className={`${pillClass} hover:bg-[#ececf4] hover:border-[#7372A5] underline decoration-dotted`}
-                            title={`${c.excerpt}\n\nClick to view source in notes`}
+                            title={`${c.excerpt}\n\nSource: ${c.sourceFilename || 'Material'}\nLocator: ${c.locator}\nClick to view source in notes`}
                           >
                             <span className="material-symbols-outlined text-[10px]">
                               open_in_new
                             </span>
-                            <span>{c.locator}</span>
+                            <span className="max-w-[200px] truncate">{citationLabel}</span>
                           </a>
                         );
                       }
 
                       return (
-                        <span key={cIdx} className={pillClass} title={c.excerpt}>
+                        <span key={cIdx} className={pillClass} title={`${c.excerpt}\n\nSource: ${c.sourceFilename || 'Material'}\nLocator: ${c.locator}`}>
                           <span className="material-symbols-outlined text-[10px]">
                             description
                           </span>
-                          <span>{c.locator}</span>
+                          <span className="max-w-[200px] truncate">{citationLabel}</span>
                         </span>
                       );
                     })}

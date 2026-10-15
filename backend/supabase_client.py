@@ -653,3 +653,176 @@ async def update_task_status(
         logger.warning("update_task_status failed: %s", e)
         return False
 
+
+# ============================================================
+# USER PROFILES & ACCOUNT DATA MANAGEMENT
+# ============================================================
+
+async def fetch_user_profile(
+    client: Client | None,
+    user_id: str | None,
+) -> dict | None:
+    if client is None or user_id is None:
+        return None
+
+    try:
+        result = client.table("profiles").select("*").eq("id", user_id).limit(1).execute()
+        rows = result.data or []
+        if rows:
+            return rows[0]
+        return None
+    except Exception as e:
+        logger.warning("fetch_user_profile failed: %s", e)
+        return None
+
+
+async def save_user_profile(
+    client: Client | None,
+    user_id: str | None,
+    profile_data: dict,
+) -> bool:
+    if client is None or user_id is None:
+        return False
+
+    try:
+        payload = {
+            "id": user_id,
+            **profile_data,
+            "updated_at": "now()",
+        }
+        client.table("profiles").upsert(
+            payload,
+            on_conflict="id",
+        ).execute()
+        return True
+    except Exception as e:
+        logger.warning("save_user_profile failed: %s", e)
+        return False
+
+
+async def reset_user_learning_data(
+    client: Client | None,
+    user_id: str | None,
+) -> bool:
+    if client is None or user_id is None:
+        return False
+
+    try:
+        # Clear quiz history
+        try:
+            client.table("quiz_history").delete().eq("user_id", user_id).execute()
+        except Exception as e_qh:
+            logger.warning("Clear quiz_history error: %s", e_qh)
+
+        # Clear topic mastery
+        try:
+            client.table("topic_mastery").delete().eq("user_id", user_id).execute()
+        except Exception as e_tm:
+            logger.warning("Clear topic_mastery error: %s", e_tm)
+
+        # Clear owned material collections
+        try:
+            client.table("material_collections").delete().eq("user_id", user_id).execute()
+        except Exception as e_mc:
+            logger.warning("Clear material_collections error: %s", e_mc)
+
+        return True
+    except Exception as e:
+        logger.warning("reset_user_learning_data failed: %s", e)
+        return False
+
+
+# ============================================================
+# MATERIAL COLLECTION PERSISTENCE
+# Multi-file ingestion: stable collection IDs survive across cold starts.
+# ============================================================
+
+async def save_material_collection(
+    collection_id: str,
+    collection_data: dict,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
+) -> None:
+    """
+    Persist a serialized MaterialCollection to Supabase material_collections table.
+    Uses upsert on collection_id so re-ingestion updates in place.
+    """
+    client = get_backend_persistence_client(auth_client)
+    if client is None:
+        return
+
+    try:
+        import json as _json
+
+        payload: dict = {
+            "collection_id": collection_id,
+            "collection_data": collection_data,
+            "updated_at": "now()",
+        }
+        if user_id:
+            payload["user_id"] = user_id
+
+        client.table("material_collections").upsert(
+            payload,
+            on_conflict="collection_id",
+        ).execute()
+    except Exception as e:
+        logger.warning("save_material_collection failed: %s", e)
+
+
+async def load_material_collection(
+    collection_id: str,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
+) -> dict | None:
+    """
+    Load a serialized MaterialCollection from Supabase.
+    Returns None if not found or if ownership check fails.
+    """
+    client = get_backend_persistence_client(auth_client)
+    if client is None:
+        return None
+
+    try:
+        result = client.table("material_collections").select(
+            "collection_data, user_id"
+        ).eq("collection_id", collection_id).limit(1).execute()
+
+        rows = result.data or []
+        if not rows:
+            return None
+
+        row = rows[0]
+        owner = row.get("user_id")
+        if owner and user_id and owner != user_id:
+            logger.warning(
+                "Unauthorized attempt to load collection %s by user %s",
+                collection_id, user_id,
+            )
+            return None
+
+        return row.get("collection_data")
+    except Exception as e:
+        logger.warning("load_material_collection failed: %s", e)
+        return None
+
+
+async def list_user_collections(
+    user_id: str | None,
+    auth_client: Client | None = None,
+    limit: int = 20,
+) -> list[dict]:
+    """List all collection metadata records for a user (no chunks, no concepts)."""
+    client = get_backend_persistence_client(auth_client)
+    if client is None or not user_id:
+        return []
+
+    try:
+        result = client.table("material_collections").select(
+            "collection_id, collection_data->>'name' AS name, "
+            "collection_data->>'updated_at' AS updated_at, user_id"
+        ).eq("user_id", user_id).order("updated_at", desc=True).limit(limit).execute()
+        return result.data or []
+    except Exception as e:
+        logger.warning("list_user_collections failed: %s", e)
+        return []

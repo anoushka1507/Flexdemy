@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Quiz, AdaptiveQuizLaunch } from '../types';
-import { supabase } from '../supabaseClient';
+import { AdaptiveQuizLaunch, FileQueueItem } from '../types';
 import { apiFetch } from '../utils/api';
+import { MultiFileQueue } from './MultiFileQueue';
+import { uploadMaterialCollection } from '../utils/materialIngestion';
 
 const QUESTION_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: 'mcq', label: 'Multiple Choice' },
@@ -34,12 +35,11 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
   const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
   const [questionCount, setQuestionCount] = useState<number>(10);
   const [loading, setLoading] = useState(false);
-  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [fileQueue, setFileQueue] = useState<FileQueueItem[]>([]);
+  const [collectionId, setCollectionId] = useState<string | null>(null);
   const [questionTypes, setQuestionTypes] = useState<string[]>(['mcq']);
 
-  // Student-chosen quiz scope: preview extracted topics for the
-  // uploaded file, then let them narrow which ones get quizzed.
+  // Student-chosen quiz scope
   const [extractedConcepts, setExtractedConcepts] = useState<ConceptDraft[] | null>(null);
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
   const [extractingTopics, setExtractingTopics] = useState(false);
@@ -56,30 +56,28 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
     });
   };
 
-  if (!isOpen) return null;
-
-  const handleFileUpload = (
-  e: React.ChangeEvent<HTMLInputElement>
-) => {
-  const file = e.target.files?.[0];
-
-  if (file) {
-    setSelectedFile(file);
-    setSelectedFileName(file.name);
-
-    // A new file invalidates any previous topic preview.
+  const handleQueueChange = (newQueue: FileQueueItem[]) => {
+    setFileQueue(newQueue);
+    // Invalidate cached concept drafts if files are added or removed
     setExtractedConcepts(null);
     setSelectedTopics([]);
     setExtractError(null);
 
-    if (!topic) {
-      setTopic(file.name.replace(/\.[^/.]+$/, ''));
+    if (!topic && newQueue.length > 0) {
+      setTopic(newQueue[0].name.replace(/\.[^/.]+$/, ''));
     }
-  }
-};
+  };
+
+  const handleRetryItem = (failedItem: FileQueueItem) => {
+    setFileQueue((prev) =>
+      prev.map((it) =>
+        it.id === failedItem.id ? { ...it, status: 'queued', error: undefined } : it
+      )
+    );
+  };
 
   const uniqueTopics = extractedConcepts
-    ? Array.from(new Set(extractedConcepts.map((c) => c.topic)))
+    ? Array.from(new Set(extractedConcepts.map((c) => c.topic).filter(Boolean)))
     : [];
 
   const toggleTopic = (t: string) => {
@@ -89,14 +87,27 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
   };
 
   const handlePreviewTopics = async () => {
-    if (!selectedFile) return;
+    if (fileQueue.length === 0) {
+      setExtractError('Please upload at least one study file first.');
+      return;
+    }
 
     setExtractingTopics(true);
     setExtractError(null);
 
     try {
+      // 1. Ingest batch of files to get or update collection
+      const ingestResult = await uploadMaterialCollection(fileQueue, collectionId || undefined, topic);
+      setFileQueue(ingestResult.items);
+      setCollectionId(ingestResult.collectionId);
+
+      if (ingestResult.succeeded === 0) {
+        throw new Error('All uploaded files failed processing. Please check file format and size.');
+      }
+
+      // 2. Extract concepts across the collection
       const formData = new FormData();
-      formData.append('file', selectedFile);
+      formData.append('collection_id', ingestResult.collectionId);
 
       const response = await apiFetch('/api/extract-concepts', {
         method: 'POST',
@@ -104,133 +115,172 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
       });
 
       if (!response.ok) {
-        throw new Error(`Topic extraction failed: ${response.status}`);
+        let errDetail = `Topic extraction failed: ${response.status}`;
+        try {
+          const errData = await response.json();
+          if (errData?.detail) errDetail = errData.detail;
+        } catch (_) {}
+        throw new Error(errDetail);
       }
 
       const data = await response.json();
       const concepts: ConceptDraft[] = data.concepts || [];
 
       if (concepts.length === 0) {
-        setExtractError('No topics could be extracted from this file.');
+        setExtractError('No distinct topics could be extracted from these files.');
         return;
       }
 
       setExtractedConcepts(concepts);
-      setSelectedTopics(Array.from(new Set(concepts.map((c) => c.topic))));
+      setSelectedTopics(Array.from(new Set(concepts.map((c) => c.topic).filter(Boolean))));
     } catch (err) {
       console.error('Topic extraction error:', err);
-      setExtractError('Could not extract topics. You can still start the quiz with everything included.');
+      setExtractError(
+        err instanceof Error
+          ? err.message
+          : 'Could not extract topics. You can still start the quiz with all content included.'
+      );
     } finally {
       setExtractingTopics(false);
     }
   };
+
   const handleQuickTopic = (quickTopic: string) => {
     setTopic(quickTopic);
     setContent(`Sample study notes for ${quickTopic}`);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
+    e.preventDefault();
 
-  if (!selectedFile) {
-    setSubmitError('Please select a file to upload.');
-    return;
-  }
-
-  setLoading(true);
-  setSubmitError(null);
-
-  try {
-    const formData = new FormData();
-
-    formData.append('file', selectedFile);
-    formData.append('question_types', questionTypes.join(','));
-
-    if (extractedConcepts) {
-      formData.append('concept_drafts_json', JSON.stringify(extractedConcepts));
-      formData.append('selected_topics', selectedTopics.join(','));
+    if (fileQueue.length === 0 && !content.trim()) {
+      setSubmitError('Please upload study files or enter study notes.');
+      return;
     }
 
-    if (isDiagnosticMode) {
-      formData.append('is_diagnostic', 'true');
-    }
+    setLoading(true);
+    setSubmitError(null);
 
-    const difficultyValue = difficulty.toLowerCase();
+    try {
+      let activeCollectionId = collectionId;
 
-    const response = await apiFetch(
-      `/api/start-adaptive-quiz?difficulty=${difficultyValue}&question_count=${questionCount}`,
-      {
-        method: 'POST',
-        body: formData,
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-
-      if (errorText.includes('RESOURCE_EXHAUSTED')) {
-        throw new Error(
-          "The AI is handling too many requests right now (free-tier rate limit). Wait about a minute and try again."
+      // Ingest if not already ingested, or if any file is still queued
+      if (fileQueue.length > 0 && (!activeCollectionId || fileQueue.some((f) => f.status === 'queued'))) {
+        const ingestResult = await uploadMaterialCollection(
+          fileQueue,
+          activeCollectionId || undefined,
+          topic
         );
+        setFileQueue(ingestResult.items);
+        activeCollectionId = ingestResult.collectionId;
+        setCollectionId(ingestResult.collectionId);
+
+        if (ingestResult.succeeded === 0 && !content.trim()) {
+          throw new Error('Could not extract material from any of the uploaded files.');
+        }
       }
 
-      let detail = errorText;
-      try {
-        detail = JSON.parse(errorText)?.detail || errorText;
-      } catch {
-        // errorText wasn't JSON, use it as-is
+      const formData = new FormData();
+
+      if (activeCollectionId) {
+        formData.append('collection_id', activeCollectionId);
+      } else if (fileQueue.length === 1 && fileQueue[0].file) {
+        // Single file fallback
+        formData.append('file', fileQueue[0].file);
+      } else if (content.trim()) {
+        const textBlob = new Blob([content], { type: 'text/plain' });
+        const textFile = new File([textBlob], `${topic || 'notes'}.txt`, { type: 'text/plain' });
+        formData.append('file', textFile);
       }
 
-      throw new Error(detail || `Quiz generation failed (${response.status})`);
+      formData.append('title', topic || 'Adaptive Quiz');
+      formData.append('question_types', questionTypes.join(','));
+
+      if (extractedConcepts) {
+        formData.append('concept_drafts_json', JSON.stringify(extractedConcepts));
+        formData.append('selected_topics', selectedTopics.join(','));
+      }
+
+      if (isDiagnosticMode) {
+        formData.append('is_diagnostic', 'true');
+      }
+
+      const difficultyValue = difficulty.toLowerCase();
+
+      const response = await apiFetch(
+        `/api/start-adaptive-quiz?difficulty=${difficultyValue}&question_count=${questionCount}`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+
+        if (errorText.includes('RESOURCE_EXHAUSTED')) {
+          throw new Error(
+            'The AI is handling too many requests right now (free-tier rate limit). Wait about a minute and try again.'
+          );
+        }
+
+        let detail = errorText;
+        try {
+          detail = JSON.parse(errorText)?.detail || errorText;
+        } catch {
+          // not JSON
+        }
+
+        throw new Error(detail || `Quiz generation failed (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      const launch: AdaptiveQuizLaunch = {
+        sessionId: data.session_id,
+        title: data.title || topic || 'Adaptive Quiz',
+        totalQuestions: data.total_questions,
+        firstQuestion: {
+          id: data.question_number,
+          question: data.question.question_text,
+          options: (data.question.options || []).map((opt: any) => opt.text),
+          correctAnswerIndex: (data.question.options || []).findIndex((opt: any) => opt.is_correct),
+          hint: '',
+          explanation: '',
+          concept: data.concept_label,
+          difficulty: data.difficulty,
+          questionType: data.question.question_type || 'mcq',
+          topic: data.question.topic,
+          sourceLocator: data.question.source_locator,
+          backendQuestion: data.question,
+        },
+      };
+
+      onQuizStarted(launch);
+      onClose();
+    } catch (err) {
+      console.error('Quiz generation error:', err);
+      setSubmitError(
+        err instanceof Error ? err.message : 'Could not generate the quiz. Please try again.'
+      );
+    } finally {
+      setLoading(false);
     }
+  };
 
-    const data = await response.json();
-
-    console.log('Started adaptive quiz:', data);
-
-    const launch: AdaptiveQuizLaunch = {
-      sessionId: data.session_id,
-      title: data.title || topic || 'Adaptive Quiz',
-      totalQuestions: data.total_questions,
-      firstQuestion: {
-        id: data.question_number,
-        question: data.question.question_text,
-        options: (data.question.options || []).map((opt: any) => opt.text),
-        correctAnswerIndex: (data.question.options || []).findIndex((opt: any) => opt.is_correct),
-        hint: '',
-        explanation: '',
-        concept: data.concept_label,
-        difficulty: data.difficulty,
-        questionType: data.question.question_type || 'mcq',
-        topic: data.question.topic,
-        sourceLocator: data.question.source_locator,
-        backendQuestion: data.question,
-      },
-    };
-
-    onQuizStarted(launch);
-    onClose();
-
-  } catch (err) {
-    console.error('Quiz generation error:', err);
-    setSubmitError(
-      err instanceof Error ? err.message : 'Could not generate the quiz. Please try again.'
-    );
-  } finally {
-    setLoading(false);
-  }
-};
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-[#d8d7e8] overflow-hidden flex flex-col max-h-[90vh]">
-        
         {/* Modal Header */}
         <div className="p-5 bg-[#7372A5] text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div>
               <h3 className="font-bold text-lg font-display">Generate AI Adaptive Quiz</h3>
-              <p className="text-xs text-gray-200">Upload notes, paste text, or enter a topic</p>
+              <p className="text-xs text-gray-200">
+                Upload one or more study files (PDF, slides, text, video) or enter notes
+              </p>
             </div>
           </div>
           <button
@@ -242,28 +292,29 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
         </div>
 
         {/* Form Body */}
-        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-5 text-left">
-          
+        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-5 text-left custom-scrollbar">
           {/* Quick Select Preset Topics */}
           <div>
             <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">
               Quick Pick Topic Preset
             </label>
             <div className="flex flex-wrap gap-2">
-              {['Python Basics', 'DBMS Fundamentals', 'Networking Basics', 'Machine Learning', 'World History'].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => handleQuickTopic(preset)}
-                  className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-all ${
-                    topic === preset
-                      ? 'bg-[#7372A5] text-white font-bold shadow-sm'
-                      : 'bg-[#ececf4] text-[#7372A5] hover:bg-[#d8d7e8] border border-[#d8d7e8]'
-                  }`}
-                >
-                   {preset}
-                </button>
-              ))}
+              {['Python Basics', 'DBMS Fundamentals', 'Networking Basics', 'Machine Learning', 'World History'].map(
+                (preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => handleQuickTopic(preset)}
+                    className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-all ${
+                      topic === preset
+                        ? 'bg-[#7372A5] text-white font-bold shadow-sm'
+                        : 'bg-[#ececf4] text-[#7372A5] hover:bg-[#d8d7e8] border border-[#d8d7e8]'
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                )
+              )}
             </div>
           </div>
 
@@ -282,37 +333,35 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
             />
           </div>
 
-          {/* File Drag & Drop or Text Area */}
+          {/* Multi-File Queue */}
           <div>
             <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-              Upload Material or Paste Study Notes
+              Study Materials (Multi-File Ingestion)
             </label>
-            
-            <div className="border-2 border-dashed border-[#d8d7e8] rounded-2xl p-4 text-center bg-[#f6f6fa] hover:bg-[#ececf4]/50 transition-colors relative mb-3">
-              <input
-                type="file"
-                accept=".pdf,.txt,.md,.pptx,.mp4,.mov,.webm,.mkv"
-                onChange={handleFileUpload}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              />
-              <span className="material-symbols-outlined text-3xl text-[#7372A5] mb-1">cloud_upload</span>
-              <p className="text-xs font-bold text-[#222138]">
-                {selectedFileName ? `Selected: ${selectedFileName}` : 'Click to upload a PDF, slide deck, lecture video, or text file'}
-              </p>
-              <p className="text-[11px] text-gray-400 mt-0.5">Drag & drop your study notes here</p>
-            </div>
-
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="Or paste your raw study text, lecture notes, or key definitions here..."
-              rows={4}
-              className="w-full p-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#7372A5]/50 text-xs font-mono"
+            <MultiFileQueue
+              items={fileQueue}
+              onItemsChange={handleQueueChange}
+              onRetryItem={handleRetryItem}
+              disabled={loading || extractingTopics}
             />
+
+            {/* Optional text area */}
+            <div className="mt-3">
+              <label className="block text-[11px] font-semibold text-gray-500 mb-1">
+                Optional: Paste additional raw notes or key definitions
+              </label>
+              <textarea
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder="Paste extra lecture notes, formula sheets, or definitions here..."
+                rows={2}
+                className="w-full p-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#7372A5]/50 text-xs font-mono"
+              />
+            </div>
           </div>
 
           {/* Student-Chosen Quiz Scope */}
-          {selectedFile && (
+          {fileQueue.length > 0 && (
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
@@ -321,25 +370,23 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
                 <button
                   type="button"
                   onClick={handlePreviewTopics}
-                  disabled={extractingTopics}
+                  disabled={extractingTopics || loading}
                   className="text-xs font-semibold text-[#7372A5] hover:underline disabled:opacity-50"
                 >
                   {extractingTopics
-                    ? 'Scanning material...'
+                    ? 'Scanning files across collection...'
                     : extractedConcepts
-                      ? 'Rescan topics'
-                      : 'Preview topics in this file'}
+                    ? 'Rescan collection topics'
+                    : `Preview topics in collection (${fileQueue.length} files)`}
                 </button>
               </div>
 
-              {extractError && (
-                <p className="text-[11px] text-red-500 mb-1">{extractError}</p>
-              )}
+              {extractError && <p className="text-[11px] text-red-500 mb-1">{extractError}</p>}
 
               {extractedConcepts && (
                 <div className="border border-[#d8d7e8] rounded-xl p-3 bg-[#f6f6fa]">
                   <p className="text-[11px] text-gray-500 mb-2">
-                    Pick which topics the quiz should draw from. Unchecked topics are skipped.
+                    Pick which topics the quiz should draw from across all files. Unchecked topics are skipped.
                   </p>
                   <div className="flex flex-wrap gap-2">
                     {uniqueTopics.map((t) => (
@@ -359,52 +406,15 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
                   </div>
                   {selectedTopics.length === 0 && (
                     <p className="text-[11px] text-red-500 mt-2">
-                      Select at least one topic, or the full material will be used instead.
+                      Select at least one topic, or the full material collection will be used instead.
                     </p>
                   )}
-
-                  <div className="mt-3 pt-3 border-t border-[#d8d7e8] space-y-2 max-h-40 overflow-y-auto">
-                    {uniqueTopics.map((t) => {
-                      const conceptsInTopic = extractedConcepts.filter(
-                        (c) => c.topic === t
-                      );
-
-                      const subtopics = Array.from(
-                        new Set(
-                          conceptsInTopic
-                            .map((c) => c.subtopic)
-                            .filter((s) => s)
-                        )
-                      );
-
-                      return (
-                        <div key={t} className="text-[11px]">
-                          <p className="font-bold text-[#222138]">{t}</p>
-                          {subtopics.length > 0 && (
-                            <p className="text-gray-500 ml-2">
-                              Subtopics: {subtopics.join(', ')}
-                            </p>
-                          )}
-                          {conceptsInTopic.map((c) => (
-                            <p key={c.label} className="text-gray-500 ml-2">
-                              • {c.label}
-                              {c.prerequisites.length > 0 && (
-                                <span className="text-[#7372A5]">
-                                  {' '}(requires: {c.prerequisites.join(', ')})
-                                </span>
-                              )}
-                            </p>
-                          ))}
-                        </div>
-                      );
-                    })}
-                  </div>
                 </div>
               )}
             </div>
           )}
 
-          {/* Diagnostic Placement Mode Toggle (Requirement 4.b) */}
+          {/* Diagnostic Placement Mode Toggle */}
           <div className="p-3.5 rounded-2xl border border-purple-200 bg-purple-50/70 space-y-2">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -430,7 +440,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
             </div>
             <p className="text-[11px] text-gray-600 leading-normal">
               {isDiagnosticMode
-                ? 'Active: Selects 1 representative Medium question per major topic to cleanly calibrate your Bayesian Knowledge Tracing (BKT) baseline mastery vector P(L_0) with 0 LLM grading tokens.'
+                ? 'Active: Selects 1 representative Medium question per major topic across your collection to cleanly calibrate your Bayesian Knowledge Tracing (BKT) baseline mastery vector P(L_0).'
                 : 'Enable for new students or intake calibration before regular adaptive quizzing.'}
             </p>
           </div>
@@ -439,7 +449,10 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-                Difficulty Level {isDiagnosticMode && <span className="text-[10px] text-[#7372A5] font-normal">(Locked to Medium for diagnostic)</span>}
+                Difficulty Level{' '}
+                {isDiagnosticMode && (
+                  <span className="text-[10px] text-[#7372A5] font-normal">(Locked to Medium for diagnostic)</span>
+                )}
               </label>
               <select
                 value={difficulty}
@@ -455,7 +468,10 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-                Question Count {isDiagnosticMode && <span className="text-[10px] text-[#7372A5] font-normal">(1 per major topic)</span>}
+                Question Count{' '}
+                {isDiagnosticMode && (
+                  <span className="text-[10px] text-[#7372A5] font-normal">(1 per major topic)</span>
+                )}
               </label>
               <select
                 value={questionCount}
@@ -504,7 +520,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
               type="submit"
               disabled={
                 loading ||
-                (!topic && !content) ||
+                (fileQueue.length === 0 && !content.trim()) ||
                 (extractedConcepts !== null && selectedTopics.length === 0)
               }
               className="w-full py-3 px-4 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-sm shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
@@ -512,7 +528,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
               {loading ? (
                 <>
                   <span className="material-symbols-outlined text-lg animate-spin">sync</span>
-                  <span>AI is Analyzing & Building Quiz...</span>
+                  <span>AI is Analyzing Collection & Building Quiz...</span>
                 </>
               ) : (
                 <>
@@ -522,9 +538,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
               )}
             </button>
           </div>
-
         </form>
-
       </div>
     </div>
   );

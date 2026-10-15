@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,8 @@ class Chunk(BaseModel):
     content_hash: str = ""
     mime_type: str = ""
     doc_id: str = ""
+    # Stable collection ID linking this chunk to a MaterialCollection
+    collection_id: str = ""
     topic_hint: str = ""
     extraction_status: str = "ok"
     warnings: list[str] = Field(default_factory=list)
@@ -320,6 +322,8 @@ class Citation(BaseModel):
     excerpt: str
     source_type: SourceType = "text"
     source_filename: str = ""
+    collection_id: str = ""
+    doc_id: str = ""
 
 
 class GroundedChatResponse(BaseModel):
@@ -359,3 +363,84 @@ class TopicMastery(BaseModel):
     )
     times_seen: int = 0
     last_updated: str = ""
+
+
+# ============================================================
+# 1.9 MULTI-FILE MATERIAL COLLECTION MODELS
+# ============================================================
+
+FileIngestionStatus = Literal[
+    "queued",
+    "processing",
+    "completed",
+    "partial",
+    "failed",
+    "skipped_duplicate",
+]
+
+
+class FileIngestionResult(BaseModel):
+    """Per-file result in a batch ingestion response."""
+    filename: str
+    doc_id: str = ""
+    content_hash: str = ""
+    mime_type: str = ""
+    size_bytes: int = 0
+    chunk_count: int = 0
+    concept_count: int = 0
+    status: FileIngestionStatus = "queued"
+    error: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+    # Locator range summary e.g. 'Page 1-24', 'Slides 1-40'
+    locator_summary: str = ""
+    cached: bool = False
+
+
+class MaterialDocument(BaseModel):
+    """Metadata for one document inside a MaterialCollection."""
+    doc_id: str
+    filename: str
+    content_hash: str
+    mime_type: str
+    size_bytes: int = 0
+    chunk_count: int = 0
+    concept_count: int = 0
+    status: FileIngestionStatus = "completed"
+    warnings: list[str] = Field(default_factory=list)
+    locator_summary: str = ""
+
+
+class MaterialCollection(BaseModel):
+    """A stable named collection of one or more ingested documents."""
+    collection_id: str
+    # Optional human name set by user or derived from first filename
+    name: str = ""
+    documents: list[MaterialDocument] = Field(default_factory=list)
+    # All chunk objects from every document, with provenance preserved
+    all_chunks: list[Chunk] = Field(default_factory=list)
+    user_id: Optional[str] = None
+    created_at: str = ""
+    updated_at: str = ""
+
+    def doc_ids(self) -> list[str]:
+        return [d.doc_id for d in self.documents]
+
+    def chunks_for_doc(self, doc_id: str) -> list[Chunk]:
+        return [c for c in self.all_chunks if c.doc_id == doc_id]
+
+    def successful_doc_count(self) -> int:
+        return sum(1 for d in self.documents if d.status in ("completed", "partial"))
+
+
+class BatchIngestionResponse(BaseModel):
+    """Response from POST /api/ingest-collection."""
+    collection_id: str
+    total_files: int
+    succeeded: int
+    failed: int
+    skipped_duplicates: int
+    files: list[FileIngestionResult]
+    # All concepts extracted across the collection
+    concepts: list["ConceptDraft"] = Field(default_factory=list)
+    total_chunks: int = 0
+    warnings: list[str] = Field(default_factory=list)
