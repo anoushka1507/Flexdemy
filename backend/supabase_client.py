@@ -826,3 +826,274 @@ async def list_user_collections(
     except Exception as e:
         logger.warning("list_user_collections failed: %s", e)
         return []
+
+
+# ============================================================
+# SAVED LEARNING PATHS (Course flows persisted to user profile)
+# ============================================================
+
+_in_memory_learning_paths: dict[str, list[dict]] = {}
+
+async def fetch_saved_learning_paths(
+    client: Client | None,
+    user_id: str | None,
+) -> list[dict]:
+    """Fetch all saved learning paths for a user, ordered by updated_at desc."""
+    if not user_id:
+        return []
+
+    if client is not None:
+        try:
+            result = client.table("saved_learning_paths").select("*").eq(
+                "user_id", user_id
+            ).order("updated_at", desc=True).limit(50).execute()
+            if result.data is not None:
+                return result.data
+        except Exception as e:
+            logger.warning("fetch_saved_learning_paths from Supabase failed: %s; falling back to in-memory store", e)
+
+    return _in_memory_learning_paths.get(user_id, [])
+
+
+async def save_learning_path(
+    client: Client | None,
+    user_id: str | None,
+    path_data: dict,
+) -> bool:
+    """Save or update a learning path for the user."""
+    if not user_id:
+        return False
+
+    path_id = path_data.get("id")
+    if not path_id:
+        import uuid
+        path_id = str(uuid.uuid4())
+        path_data["id"] = path_id
+
+    import datetime
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    path_data["updated_at"] = now_iso
+    if "created_at" not in path_data:
+        path_data["created_at"] = now_iso
+    path_data["user_id"] = user_id
+
+    # 1. Update in-memory fallback store
+    user_paths = _in_memory_learning_paths.setdefault(user_id, [])
+    existing_idx = next((i for i, p in enumerate(user_paths) if p.get("id") == path_id), None)
+    if existing_idx is not None:
+        user_paths[existing_idx] = path_data
+    else:
+        user_paths.insert(0, path_data)
+
+    # 2. Persist to Supabase if client available
+    if client is not None:
+        try:
+            client.table("saved_learning_paths").upsert(
+                path_data,
+                on_conflict="id",
+            ).execute()
+            return True
+        except Exception as e:
+            logger.warning("save_learning_path upsert failed: %s; attempting insert", e)
+            try:
+                client.table("saved_learning_paths").insert(path_data).execute()
+                return True
+            except Exception as e2:
+                logger.error("save_learning_path insert failed: %s", e2)
+
+    return True
+
+
+async def delete_learning_path(
+    client: Client | None,
+    user_id: str | None,
+    path_id: str,
+) -> bool:
+    """Delete a saved learning path."""
+    if not user_id or not path_id:
+        return False
+
+    # 1. Remove from in-memory fallback
+    if user_id in _in_memory_learning_paths:
+        _in_memory_learning_paths[user_id] = [
+            p for p in _in_memory_learning_paths[user_id] if p.get("id") != path_id
+        ]
+
+    # 2. Remove from Supabase
+    if client is not None:
+        try:
+            client.table("saved_learning_paths").delete().eq(
+                "id", path_id
+            ).eq("user_id", user_id).execute()
+            return True
+        except Exception as e:
+            logger.warning("delete_learning_path failed: %s", e)
+
+    return True
+
+
+# ============================================================
+# FLASHCARD DECKS & SPACED REPETITION REVIEWS
+# ============================================================
+
+_in_memory_flashcard_decks: dict[str, list[dict]] = {}
+_in_memory_flashcard_reviews: dict[str, list[dict]] = {}
+
+async def fetch_flashcard_decks(
+    client: Client | None,
+    user_id: str | None,
+) -> list[dict]:
+    """Fetch all flashcard decks for a user, ordered by updated_at desc."""
+    if not user_id:
+        return []
+
+    if client is not None:
+        try:
+            result = client.table("flashcard_decks").select("*").eq(
+                "user_id", user_id
+            ).order("updated_at", desc=True).limit(50).execute()
+            if result.data is not None:
+                return result.data
+        except Exception as e:
+            logger.warning("fetch_flashcard_decks from Supabase failed: %s; falling back to in-memory store", e)
+
+    return _in_memory_flashcard_decks.get(user_id, [])
+
+
+async def save_flashcard_deck(
+    client: Client | None,
+    user_id: str | None,
+    deck_data: dict,
+) -> bool:
+    """Save or update a flashcard deck for the user."""
+    if not user_id:
+        return False
+
+    deck_id = deck_data.get("deck_id")
+    if not deck_id:
+        import uuid
+        deck_id = str(uuid.uuid4())
+        deck_data["deck_id"] = deck_id
+
+    import datetime
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    deck_data["updated_at"] = now_iso
+    if "created_at" not in deck_data:
+        deck_data["created_at"] = now_iso
+    deck_data["user_id"] = user_id
+
+    # 1. Update in-memory fallback
+    user_decks = _in_memory_flashcard_decks.setdefault(user_id, [])
+    existing_idx = next((i for i, d in enumerate(user_decks) if d.get("deck_id") == deck_id), None)
+    if existing_idx is not None:
+        user_decks[existing_idx] = deck_data
+    else:
+        user_decks.insert(0, deck_data)
+
+    # 2. Persist to Supabase
+    if client is not None:
+        try:
+            client.table("flashcard_decks").upsert(
+                deck_data,
+                on_conflict="deck_id",
+            ).execute()
+            return True
+        except Exception as e:
+            logger.warning("save_flashcard_deck upsert failed: %s; attempting insert", e)
+            try:
+                client.table("flashcard_decks").insert(deck_data).execute()
+                return True
+            except Exception as e2:
+                logger.error("save_flashcard_deck insert failed: %s", e2)
+
+    return True
+
+
+async def delete_flashcard_deck(
+    client: Client | None,
+    user_id: str | None,
+    deck_id: str,
+) -> bool:
+    """Delete a flashcard deck."""
+    if not user_id or not deck_id:
+        return False
+
+    # 1. Remove from in-memory fallback
+    if user_id in _in_memory_flashcard_decks:
+        _in_memory_flashcard_decks[user_id] = [
+            d for d in _in_memory_flashcard_decks[user_id] if d.get("deck_id") != deck_id
+        ]
+
+    # 2. Remove from Supabase
+    if client is not None:
+        try:
+            client.table("flashcard_decks").delete().eq(
+                "deck_id", deck_id
+            ).eq("user_id", user_id).execute()
+            return True
+        except Exception as e:
+            logger.warning("delete_flashcard_deck failed: %s", e)
+
+    return True
+
+
+async def record_flashcard_review(
+    client: Client | None,
+    user_id: str | None,
+    deck_id: str,
+    card_id: str,
+    rating: str,
+    interval_days: int,
+) -> bool:
+    """Record an SRS review event and update the card within the deck."""
+    if not user_id or not deck_id or not card_id:
+        return False
+
+    import datetime
+    import uuid
+    now = datetime.datetime.now(datetime.timezone.utc)
+    now_iso = now.isoformat()
+    review_record = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "deck_id": deck_id,
+        "card_id": card_id,
+        "rating": rating,
+        "interval_days": interval_days,
+        "reviewed_at": now_iso,
+    }
+
+    # Record review in in-memory list
+    _in_memory_flashcard_reviews.setdefault(user_id, []).append(review_record)
+
+    # Also update the card in the in-memory deck
+    user_decks = _in_memory_flashcard_decks.get(user_id, [])
+    deck = next((d for d in user_decks if d.get("deck_id") == deck_id), None)
+    if deck and "cards" in deck:
+        for card in deck["cards"]:
+            if card.get("id") == card_id:
+                card["last_reviewed"] = now_iso
+                card["last_rating"] = rating
+                card["interval_days"] = interval_days
+                next_rev = now + datetime.timedelta(days=interval_days)
+                card["next_review"] = next_rev.isoformat()
+                break
+
+    if client is not None:
+        try:
+            client.table("flashcard_reviews").insert(review_record).execute()
+        except Exception as e:
+            logger.warning("record_flashcard_review insert failed: %s", e)
+
+        # Update deck cards in Supabase
+        if deck:
+            try:
+                client.table("flashcard_decks").update({
+                    "cards": deck["cards"],
+                    "updated_at": now_iso,
+                }).eq("deck_id", deck_id).eq("user_id", user_id).execute()
+            except Exception as e:
+                logger.warning("record_flashcard_review deck cards update failed: %s", e)
+
+    return True
+

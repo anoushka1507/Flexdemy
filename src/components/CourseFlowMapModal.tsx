@@ -4,7 +4,7 @@ import { FileQueueItem } from '../types';
 import { MultiFileQueue } from './MultiFileQueue';
 import { uploadMaterialCollection } from '../utils/materialIngestion';
 
-interface ConceptNode {
+export interface ConceptNode {
   label: string;
   description: string;
   topic: string;
@@ -12,10 +12,21 @@ interface ConceptNode {
   prerequisites: string[];
 }
 
+export interface SavedLearningPathData {
+  id?: string;
+  title: string;
+  collection_id?: string;
+  source_files?: Array<{ name: string; size?: number }>;
+  concepts: ConceptNode[];
+  created_at?: string;
+}
+
 interface CourseFlowMapModalProps {
   isOpen: boolean;
   onClose: () => void;
   onPracticeTopic?: (topic: string) => void;
+  initialPath?: SavedLearningPathData | null;
+  onPathSaved?: () => void;
 }
 
 interface RankedConcept extends ConceptNode {
@@ -28,6 +39,8 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
   isOpen,
   onClose,
   onPracticeTopic,
+  initialPath,
+  onPathSaved,
 }) => {
   const [fileQueue, setFileQueue] = useState<FileQueueItem[]>([]);
   const [collectionId, setCollectionId] = useState<string | null>(null);
@@ -37,6 +50,23 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
   const [activeConcept, setActiveConcept] = useState<RankedConcept | null>(null);
   const [viewMode, setViewMode] = useState<'dag' | 'outline'>('dag');
   const [masteryData, setMasteryData] = useState<Record<string, number>>({});
+  const [pathTitle, setPathTitle] = useState('My Learning Path');
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  // Sync initialPath if opened from Saved Learning Paths
+  useEffect(() => {
+    if (initialPath && isOpen) {
+      setConcepts(initialPath.concepts || []);
+      setPathTitle(initialPath.title || 'Saved Learning Path');
+      setCollectionId(initialPath.collection_id || null);
+      setSaveSuccess(true);
+      setError('');
+    } else if (isOpen && !concepts) {
+      setSaveSuccess(false);
+    }
+  }, [initialPath, isOpen]);
 
   // Fetch student's BKT mastery profile on open to color-code DAG nodes
   useEffect(() => {
@@ -174,8 +204,12 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
     setError('');
 
     try {
-      // 1. Batch ingest all files in the queue into a stable collection
-      const ingestResult = await uploadMaterialCollection(fileQueue, collectionId || undefined);
+      // 1. Batch ingest all files in the queue into a stable collection with progress tracking
+      const ingestResult = await uploadMaterialCollection(
+        fileQueue,
+        collectionId || undefined,
+        (items) => setFileQueue(items)
+      );
       setFileQueue(ingestResult.items);
       setCollectionId(ingestResult.collectionId);
 
@@ -205,12 +239,46 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
 
       const data = await response.json();
       setConcepts(data.concepts || []);
+      const defaultTitle = fileQueue[0]?.file.name
+        ? `${fileQueue[0].file.name.replace(/\.[^/.]+$/, '')} Learning Path`
+        : 'My Learning Path';
+      setPathTitle(defaultTitle);
+      setSaveSuccess(false);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : 'Could not build the course map.'
+        err instanceof Error ? err.message : 'Could not build the learning path.'
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSaveToProfile = async () => {
+    if (!concepts || concepts.length === 0) return;
+    setIsSaving(true);
+    setError('');
+    try {
+      const res = await apiFetch('/api/learning-paths', {
+        method: 'POST',
+        body: JSON.stringify({
+          id: initialPath?.id,
+          title: pathTitle.trim() || 'My Learning Path',
+          collection_id: collectionId || '',
+          source_files: fileQueue.map((f) => ({ name: f.file.name, size: f.file.size })),
+          concepts,
+        }),
+      });
+      if (res.ok) {
+        setSaveSuccess(true);
+        if (onPathSaved) onPathSaved();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        setError(err.detail || 'Could not save learning path. Please sign in.');
+      }
+    } catch {
+      setError('Failed to save learning path to profile.');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -265,41 +333,87 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="course-flow-title">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl border border-[#d8d7e8] overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
-        <div className="p-5 bg-[#7372A5] text-white flex items-center justify-between shrink-0">
-          <div>
+        <div className="p-5 bg-[#7372A5] text-white flex items-center justify-between shrink-0 flex-wrap gap-2">
+          {concepts ? (
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-xl">account_tree</span>
-              <h3 id="course-flow-title" className="font-extrabold text-lg">Course Flow & Prerequisite DAG</h3>
+              {isEditingTitle ? (
+                <input
+                  type="text"
+                  value={pathTitle}
+                  onChange={(e) => setPathTitle(e.target.value)}
+                  onBlur={() => setIsEditingTitle(false)}
+                  onKeyDown={(e) => e.key === 'Enter' && setIsEditingTitle(false)}
+                  autoFocus
+                  className="bg-white/20 text-white font-extrabold text-base px-2 py-0.5 rounded-lg border border-white/40 focus:outline-none"
+                />
+              ) : (
+                <button
+                  onClick={() => setIsEditingTitle(true)}
+                  className="flex items-center gap-1.5 hover:bg-white/10 px-2 py-0.5 rounded-lg transition-colors text-left"
+                  title="Click to rename learning path"
+                >
+                  <h3 id="course-flow-title" className="font-extrabold text-lg">
+                    {pathTitle}
+                  </h3>
+                  <span className="material-symbols-outlined text-sm opacity-70">edit</span>
+                </button>
+              )}
             </div>
-            <p className="text-xs text-purple-100 mt-0.5">
-              Explore topic dependencies, learning order, and your mastery.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {concepts && (
-              <div className="flex rounded-xl bg-white/10 p-1 text-xs">
-                <button
-                  onClick={() => setViewMode('dag')}
-                  className={`px-3 py-1 rounded-lg font-bold transition-all ${
-                    viewMode === 'dag'
-                      ? 'bg-white text-[#7372A5] shadow-xs'
-                      : 'text-white hover:text-purple-200'
-                  }`}
-                >
-                  DAG Flow
-                </button>
-                <button
-                  onClick={() => setViewMode('outline')}
-                  className={`px-3 py-1 rounded-lg font-bold transition-all ${
-                    viewMode === 'outline'
-                      ? 'bg-white text-[#7372A5] shadow-xs'
-                      : 'text-white hover:text-purple-200'
-                  }`}
-                >
-                  Topic Tree
-                </button>
+          ) : (
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-xl">account_tree</span>
+                <h3 id="course-flow-title" className="font-extrabold text-lg">Learning Path & Topic Connections</h3>
               </div>
+              <p className="text-xs text-purple-100 mt-0.5">
+                Explore topic dependencies, learning order, and your mastery.
+              </p>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2 flex-wrap">
+            {concepts && (
+              <>
+                <button
+                  onClick={handleSaveToProfile}
+                  disabled={isSaving}
+                  className={`flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all shadow-xs ${
+                    saveSuccess
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-white text-[#7372A5] hover:bg-purple-50'
+                  }`}
+                  title="Save this learning path to your profile"
+                >
+                  <span className="material-symbols-outlined text-sm">
+                    {saveSuccess ? 'check_circle' : 'bookmark_add'}
+                  </span>
+                  <span>{isSaving ? 'Saving...' : saveSuccess ? 'Saved to My Learning' : 'Save to My Learning'}</span>
+                </button>
+
+                <div className="flex rounded-xl bg-white/10 p-1 text-xs">
+                  <button
+                    onClick={() => setViewMode('dag')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                      viewMode === 'dag'
+                        ? 'bg-white text-[#7372A5] shadow-xs'
+                        : 'text-white hover:text-purple-200'
+                    }`}
+                  >
+                    Learning Order
+                  </button>
+                  <button
+                    onClick={() => setViewMode('outline')}
+                    className={`px-3 py-1 rounded-lg font-bold transition-all ${
+                      viewMode === 'outline'
+                        ? 'bg-white text-[#7372A5] shadow-xs'
+                        : 'text-white hover:text-purple-200'
+                    }`}
+                  >
+                    Topics Outline
+                  </button>
+                </div>
+              </>
             )}
             <button
               onClick={onClose}
@@ -355,7 +469,7 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                     <>
                       <span className="material-symbols-outlined text-sm">hub</span>
                       <span>
-                        Generate Course Prerequisite DAG{' '}
+                        Generate Learning Path{' '}
                         {fileQueue.length > 0 ? `(${fileQueue.length} files)` : ''}
                       </span>
                     </>
@@ -422,7 +536,7 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                   </span>
                 </div>
                 <span className="text-[11px] font-bold text-gray-400">
-                  Client-side DAG • 0 LLM Tokens
+                  Topic Connections • 0 LLM Tokens
                 </span>
               </div>
 

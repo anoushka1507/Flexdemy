@@ -97,7 +97,12 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
     try {
       // 1. Ingest batch of files to get or update collection
-      const ingestResult = await uploadMaterialCollection(fileQueue, collectionId || undefined, topic);
+      const ingestResult = await uploadMaterialCollection(
+        fileQueue,
+        collectionId || undefined,
+        topic,
+        (updated) => setFileQueue(updated)
+      );
       setFileQueue(ingestResult.items);
       setCollectionId(ingestResult.collectionId);
 
@@ -169,7 +174,8 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
         const ingestResult = await uploadMaterialCollection(
           fileQueue,
           activeCollectionId || undefined,
-          topic
+          topic,
+          (updated) => setFileQueue(updated)
         );
         setFileQueue(ingestResult.items);
         activeCollectionId = ingestResult.collectionId;
@@ -178,6 +184,15 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
         if (ingestResult.succeeded === 0 && !content.trim()) {
           throw new Error('Could not extract material from any of the uploaded files.');
         }
+
+        // Set completed items stage to preparing_questions
+        setFileQueue((prev) =>
+          prev.map((it) =>
+            it.status === 'completed'
+              ? { ...it, stage: 'preparing_questions' as const }
+              : it
+          )
+        );
       }
 
       const formData = new FormData();
@@ -438,56 +453,56 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
                 <div className="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#7372A5]"></div>
               </label>
             </div>
-            <p className="text-[11px] text-gray-600 leading-normal">
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-normal">
               {isDiagnosticMode
-                ? 'Active: Selects 1 representative Medium question per major topic across your collection to cleanly calibrate your Bayesian Knowledge Tracing (BKT) baseline mastery vector P(L_0).'
-                : 'Enable for new students or intake calibration before regular adaptive quizzing.'}
+                ? 'Active: Selects 1 representative question per major topic across your uploaded materials to calibrate your personalized learning path.'
+                : 'Recommended for intake calibration to assess baseline knowledge before adaptive quizzing.'}
             </p>
           </div>
 
           {/* Difficulty and Question Count */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+              <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
                 Difficulty Level{' '}
                 {isDiagnosticMode && (
-                  <span className="text-[10px] text-[#7372A5] font-normal">(Locked to Medium for diagnostic)</span>
+                  <span className="text-[10px] text-[#7372A5] dark:text-[#a1a0d3] font-normal">(Locked to Medium)</span>
                 )}
               </label>
               <select
                 value={difficulty}
                 disabled={isDiagnosticMode}
                 onChange={(e) => setDifficulty(e.target.value as any)}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5] disabled:bg-gray-100 disabled:opacity-70"
+                className="w-full px-3 py-2 rounded-xl border border-[#d8d7e8] dark:border-[#312f45] bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8] text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5] disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:opacity-60"
               >
-                <option value="Easy">Easy</option>
-                <option value="Medium">Medium</option>
-                <option value="Hard">Hard</option>
+                <option value="Easy" className="bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8]">Easy</option>
+                <option value="Medium" className="bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8]">Medium</option>
+                <option value="Hard" className="bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8]">Hard</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-                Question Count{' '}
+              <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
+                Number of Questions{' '}
                 {isDiagnosticMode && (
-                  <span className="text-[10px] text-[#7372A5] font-normal">(1 per major topic)</span>
+                  <span className="text-[10px] text-[#7372A5] dark:text-[#a1a0d3] font-normal">(1 per topic)</span>
                 )}
               </label>
               <select
                 value={questionCount}
                 disabled={isDiagnosticMode}
                 onChange={(e) => setQuestionCount(Number(e.target.value))}
-                className="w-full px-3 py-2 rounded-xl border border-gray-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5] disabled:bg-gray-100 disabled:opacity-70"
+                className="w-full px-3 py-2 rounded-xl border border-[#d8d7e8] dark:border-[#312f45] bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8] text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#7372A5] disabled:bg-gray-100 dark:disabled:bg-gray-800 disabled:opacity-60"
               >
-                <option value={5}>5 Questions</option>
-                <option value={10}>10 Questions</option>
+                <option value={5} className="bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8]">5 Questions</option>
+                <option value={10} className="bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8]">10 Questions</option>
               </select>
             </div>
           </div>
 
           {/* Question Types */}
           <div>
-            <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+            <label className="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider mb-1">
               Question Types
             </label>
             <div className="flex flex-wrap gap-2">
@@ -498,8 +513,8 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
                   onClick={() => toggleQuestionType(opt.value)}
                   className={`text-xs px-3 py-1.5 rounded-xl font-medium transition-all ${
                     questionTypes.includes(opt.value)
-                      ? 'bg-[#7372A5] text-white font-bold shadow-sm'
-                      : 'bg-[#ececf4] text-[#7372A5] hover:bg-[#d8d7e8] border border-[#d8d7e8]'
+                      ? 'bg-[#7372A5] text-white font-bold shadow-xs border border-[#7372A5]'
+                      : 'bg-[#ececf4] dark:bg-[#252338] text-[#7372A5] dark:text-[#a1a0d3] hover:bg-[#d8d7e8] dark:hover:bg-[#312f45] border border-[#d8d7e8] dark:border-[#312f45]'
                   }`}
                 >
                   {opt.label}

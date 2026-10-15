@@ -76,9 +76,13 @@ from AI_Layer.models import (
 )
 
 from backend.supabase_client import (
+    delete_flashcard_deck,
+    delete_learning_path,
     fetch_asked_question_texts,
+    fetch_flashcard_decks,
     fetch_mastery,
     fetch_quiz_history,
+    fetch_saved_learning_paths,
     fetch_user_preferences,
     fetch_user_profile,
     get_user_client,
@@ -89,9 +93,12 @@ from backend.supabase_client import (
     load_quiz_material_data,
     load_quiz_session_data,
     record_asked_question,
+    record_flashcard_review,
     record_quiz_result,
     reset_user_learning_data,
     save_cached_material,
+    save_flashcard_deck,
+    save_learning_path,
     save_material_collection,
     save_quiz_material_data,
     save_quiz_session_data,
@@ -2929,6 +2936,17 @@ async def get_learner_profile_api(
         if info.get("mastery_score", 0.3) < 0.60
     ]
 
+    # 5. Fetch saved learning paths & flashcard decks
+    saved_paths = await fetch_saved_learning_paths(sb_client, user_id)
+    decks = await fetch_flashcard_decks(sb_client, user_id)
+    total_due_cards = 0
+    import datetime
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    for d in decks:
+        for c in d.get("cards", []):
+            if not c.get("next_review") or c.get("next_review") <= now_iso:
+                total_due_cards += 1
+
     return {
         "user_id": user_id,
         "profile": profile,
@@ -2942,7 +2960,254 @@ async def get_learner_profile_api(
         "weak_topics": weak_topics,
         "history": history[:15],
         "preferences": prefs,
+        "saved_learning_paths": saved_paths,
+        "flashcard_decks": decks,
+        "due_flashcards_count": total_due_cards,
     }
+
+
+# ============================================================
+# SAVED LEARNING PATHS API
+# ============================================================
+
+class SaveLearningPathPayload(BaseModel):
+    id: str | None = None
+    title: str
+    collection_id: str | None = ""
+    source_files: list | None = []
+    concepts: list[dict]
+
+
+@app.get("/learning-paths")
+async def get_learning_paths_api(
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to view your saved learning paths.",
+        )
+
+    paths = await fetch_saved_learning_paths(sb_client, user_id)
+    return {"learning_paths": paths}
+
+
+@app.post("/learning-paths")
+async def save_learning_path_api(
+    payload: SaveLearningPathPayload,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to save learning paths to your profile.",
+        )
+
+    clean_title = payload.title.strip() or "Untitled Learning Path"
+    path_data = {
+        "id": payload.id,
+        "title": clean_title,
+        "collection_id": payload.collection_id or "",
+        "source_files": payload.source_files or [],
+        "concepts": payload.concepts,
+    }
+
+    success = await save_learning_path(sb_client, user_id, path_data)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to persist learning path.")
+
+    return {"saved": True, "path": path_data}
+
+
+@app.delete("/learning-paths/{path_id}")
+async def delete_learning_path_api(
+    path_id: str,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to manage your saved learning paths.",
+        )
+
+    success = await delete_learning_path(sb_client, user_id, path_id)
+    return {"deleted": success}
+
+
+# ============================================================
+# FLASHCARD DECKS & SPACED REPETITION API
+# ============================================================
+
+class SaveFlashcardDeckPayload(BaseModel):
+    deck_id: str | None = None
+    title: str
+    topic: str = ""
+    collection_id: str | None = ""
+    cards: list[dict] = []
+
+
+class FlashcardReviewPayload(BaseModel):
+    deck_id: str
+    card_id: str
+    rating: str  # 'again' | 'hard' | 'good' | 'easy'
+    topic: str | None = None
+
+
+@app.get("/flashcard-decks")
+async def get_flashcard_decks_api(
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to view your flashcard decks.",
+        )
+
+    decks = await fetch_flashcard_decks(sb_client, user_id)
+    import datetime
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    total_due = 0
+    for d in decks:
+        deck_due = 0
+        for c in d.get("cards", []):
+            if not c.get("next_review") or c.get("next_review") <= now_iso:
+                deck_due += 1
+                total_due += 1
+        d["due_count"] = deck_due
+
+    return {"decks": decks, "total_due": total_due}
+
+
+@app.post("/flashcard-decks")
+async def save_flashcard_deck_api(
+    payload: SaveFlashcardDeckPayload,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to save flashcard decks.",
+        )
+
+    clean_title = payload.title.strip() or "Revision Flashcards"
+    cards = payload.cards
+
+    # If cards were not provided directly, generate them from collection/session if possible
+    if not cards and payload.collection_id:
+        material = await get_material(payload.collection_id, user_id=user_id, auth_client=sb_client)
+        if material and material.get("chunks"):
+            from AI_Layer.ai_core import generate_flashcards
+            generated = await generate_flashcards(
+                payload.topic or clean_title,
+                material["chunks"],
+                material.get("embeddings"),
+                count=8,
+            )
+            import uuid
+            cards = [
+                {
+                    "id": str(uuid.uuid4())[:8],
+                    "front": card.front,
+                    "back": card.back,
+                    "source_locator": card.source_locator,
+                    "topic": payload.topic or clean_title,
+                    "interval_days": 1,
+                    "repetitions": 0,
+                    "ease_factor": 2.5,
+                    "next_review": None,
+                    "last_reviewed": None,
+                    "last_rating": None,
+                }
+                for card in generated
+            ]
+
+    deck_data = {
+        "deck_id": payload.deck_id,
+        "title": clean_title,
+        "topic": payload.topic or "",
+        "collection_id": payload.collection_id or "",
+        "cards": cards,
+    }
+
+    success = await save_flashcard_deck(sb_client, user_id, deck_data)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save flashcard deck.")
+
+    return {"saved": True, "deck": deck_data}
+
+
+@app.delete("/flashcard-decks/{deck_id}")
+async def delete_flashcard_deck_api(
+    deck_id: str,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to manage your flashcard decks.",
+        )
+
+    success = await delete_flashcard_deck(sb_client, user_id, deck_id)
+    return {"deleted": success}
+
+
+@app.post("/flashcard-review")
+async def record_flashcard_review_api(
+    payload: FlashcardReviewPayload,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to record your flashcard reviews.",
+        )
+
+    rating = payload.rating.lower().strip()
+    interval_map = {
+        "again": 1,
+        "hard": 2,
+        "good": 4,
+        "easy": 7,
+    }
+    interval_days = interval_map.get(rating, 1)
+
+    success = await record_flashcard_review(
+        sb_client,
+        user_id,
+        payload.deck_id,
+        payload.card_id,
+        rating,
+        interval_days,
+    )
+
+    if payload.topic:
+        try:
+            is_correct = rating in ("good", "easy")
+            from backend.supabase_client import upsert_mastery
+            mastery_delta = 0.05 if is_correct else -0.05
+            existing_mastery = await fetch_mastery(sb_client)
+            current_score = existing_mastery.get(payload.topic.lower(), {}).get("mastery_score", 0.5)
+            new_score = max(0.1, min(0.95, current_score + mastery_delta))
+            await upsert_mastery(sb_client, payload.topic, new_score)
+        except Exception as e:
+            logger.warning("Flashcard review mastery update skipped: %s", e)
+
+    return {"recorded": success, "interval_days": interval_days}
+
 
 
 class TaskStatusRequest(BaseModel):

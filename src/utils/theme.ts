@@ -1,6 +1,7 @@
 export type ThemeMode = 'light' | 'dark' | 'system';
 
 export const THEME_STORAGE_KEY = 'flexdemy_theme';
+export const DYSLEXIA_STORAGE_KEY = 'flexdemy_dyslexia';
 
 export function getStoredTheme(): ThemeMode {
   if (typeof window === 'undefined') return 'system';
@@ -20,17 +21,38 @@ export function getSystemIsDark(): boolean {
   return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
+export function isDyslexiaMode(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.body?.classList.contains('dyslexia-mode') || false;
+}
+
 export function resolveTheme(mode: ThemeMode): 'light' | 'dark' {
   if (mode === 'dark') return 'dark';
   if (mode === 'light') return 'light';
   return getSystemIsDark() ? 'dark' : 'light';
 }
 
-export function applyTheme(mode: ThemeMode): 'light' | 'dark' {
+/**
+ * Applies the requested theme.
+ * If Dyslexia Mode is active, dark mode must NOT apply and the dedicated
+ * high-readability light presentation is enforced instead.
+ */
+export function applyTheme(mode: ThemeMode, forceAllowDark: boolean = false): 'light' | 'dark' {
   const resolved = resolveTheme(mode);
+  
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, mode);
+    } catch {
+      // LocalStorage might be restricted
+    }
+  }
+
   if (typeof document !== 'undefined') {
     const root = document.documentElement;
-    if (resolved === 'dark') {
+    const dyslexiaActive = !forceAllowDark && isDyslexiaMode();
+
+    if (resolved === 'dark' && !dyslexiaActive) {
       root.classList.add('dark');
       root.setAttribute('data-theme', 'dark');
       root.style.colorScheme = 'dark';
@@ -41,15 +63,31 @@ export function applyTheme(mode: ThemeMode): 'light' | 'dark' {
     }
   }
 
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, mode);
-    } catch {
-      // LocalStorage might be restricted
-    }
-  }
-
   return resolved;
+}
+
+/**
+ * Synchronizes theme with Dyslexia Mode.
+ * When Dyslexia Mode is ON:
+ * - Drops .dark from the DOM root and enforces readable light appearance.
+ * - Stores/preserves the user's prior Light/Dark/System preference.
+ * When Dyslexia Mode is OFF:
+ * - Restores the user's previously chosen theme preference.
+ */
+export function syncThemeWithDyslexia(isDyslexia: boolean, storedTheme?: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const targetTheme = storedTheme || getStoredTheme();
+
+  if (isDyslexia) {
+    document.body.classList.add('dyslexia-mode');
+    root.classList.remove('dark');
+    root.setAttribute('data-theme', 'light');
+    root.style.colorScheme = 'light';
+  } else {
+    document.body.classList.remove('dyslexia-mode');
+    applyTheme(targetTheme, true);
+  }
 }
 
 export function initTheme(): { theme: ThemeMode; resolvedTheme: 'light' | 'dark' } {
@@ -79,7 +117,6 @@ export function subscribeToSystemTheme(
     mediaQuery.addEventListener('change', listener);
     return () => mediaQuery.removeEventListener('change', listener);
   } else if ('addListener' in mediaQuery) {
-    // Fallback for older browsers
     (mediaQuery as any).addListener(listener);
     return () => (mediaQuery as any).removeListener(listener);
   }

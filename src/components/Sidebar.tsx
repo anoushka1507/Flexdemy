@@ -74,8 +74,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       onOpenUploadModal();
     } else if (id === 'course-map') {
       onOpenCourseMap();
-    } else if (id === 'quiz-results') {
-      onOpenLatestResults();
+    } else if (id === 'latest-results' || id === 'quiz-results') {
+      setCurrentView('latest-results');
     } else {
       setCurrentView(id as ViewMode);
     }
@@ -85,10 +85,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const learnNavItems = [
     { id: 'dashboard', label: 'Dashboard', icon: 'dashboard', tooltip: 'Dashboard Overview' },
     { id: 'quizzes-list', label: 'Quizzes', icon: 'quiz', tooltip: 'Available Quizzes' },
+    { id: 'flashcards', label: 'Flashcards', icon: 'style', tooltip: 'Spaced Repetition Flashcards' },
     { id: 'landing', label: 'Upload Material', icon: 'upload_file', tooltip: 'Upload Notes & Slides' },
-    { id: 'course-map', label: 'Course Map', icon: 'account_tree', tooltip: 'Prerequisite Concept Graph' },
+    { id: 'course-map', label: 'Course Map', icon: 'account_tree', tooltip: 'Learning Path & Topic Connections' },
     { id: 'analytics', label: 'Analytics', icon: 'insights', tooltip: 'Mastery Radar & BKT Analytics' },
-    { id: 'quiz-results', label: 'Latest Results', icon: 'fact_check', tooltip: 'Latest Quiz Insights' },
+    { id: 'latest-results', label: 'Latest Results', icon: 'fact_check', tooltip: 'Completed Quiz Attempts & Review' },
   ];
 
   const preferenceNavItems = [
@@ -98,6 +99,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   // Cycle theme: light -> dark -> system -> light
   const cycleTheme = () => {
+    if (dyslexiaMode) return;
     if (currentTheme === 'light') onThemeChange('dark');
     else if (currentTheme === 'dark') onThemeChange('system');
     else onThemeChange('light');
@@ -139,12 +141,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Mobile Theme Toggle */}
           <button
             onClick={cycleTheme}
-            aria-label={`Switch theme, current: ${themeLabel}`}
-            title={`Theme: ${themeLabel}`}
-            className="p-2 rounded-xl border border-[#d8d7e8] dark:border-[#312f45] bg-[#ececf4] dark:bg-[#242236] text-gray-700 dark:text-gray-200"
+            disabled={dyslexiaMode}
+            aria-label={dyslexiaMode ? 'Theme locked to Light while Dyslexia Mode is ON' : `Switch theme, current: ${themeLabel}`}
+            title={dyslexiaMode ? 'Theme locked to Light while Dyslexia Mode is ON' : `Theme: ${themeLabel}`}
+            className={`p-2 rounded-xl border border-[#d8d7e8] dark:border-[#312f45] bg-[#ececf4] dark:bg-[#242236] text-gray-700 dark:text-gray-200 ${
+              dyslexiaMode ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
           >
             <span className="material-symbols-outlined text-lg leading-none">
-              {themeIcon}
+              {dyslexiaMode ? 'light_mode' : themeIcon}
             </span>
           </button>
 
@@ -220,7 +225,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   Learn
                 </p>
                 {learnNavItems.map((item) => {
-                  const isActive = currentView === item.id;
+                  const isActive =
+                    currentView === item.id ||
+                    (item.id === 'latest-results' && currentView === 'quiz-results');
                   return (
                     <button
                       key={item.id}
@@ -273,6 +280,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 userProfile={userProfile}
                 isGuest={isGuest}
                 currentTheme={currentTheme}
+                dyslexiaMode={dyslexiaMode}
                 onThemeChange={onThemeChange}
                 onNavigate={(v) => {
                   setCurrentView(v);
@@ -359,17 +367,30 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {/* Compact Appearance Control */}
               <button
                 onClick={cycleTheme}
-                title={`Theme: ${themeLabel} (Click to change)`}
-                aria-label={`Current theme: ${themeLabel}. Click to switch theme.`}
-                className="flex items-center justify-between px-3 py-2 rounded-xl bg-[#ececf4] dark:bg-[#222033] border border-[#d8d7e8] dark:border-[#312f45] text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-[#7372A5]/40 transition-all focus:outline-none focus:ring-2 focus:ring-[#7372A5]/40"
+                disabled={dyslexiaMode}
+                title={
+                  dyslexiaMode
+                    ? 'Theme selection is locked to Light while Dyslexia Mode is ON'
+                    : `Theme: ${themeLabel} (Click to change)`
+                }
+                aria-label={
+                  dyslexiaMode
+                    ? 'Theme selection is locked to Light while Dyslexia Mode is ON'
+                    : `Current theme: ${themeLabel}. Click to switch theme.`
+                }
+                className={`flex items-center justify-between px-3 py-2 rounded-xl border text-xs font-bold transition-all focus:outline-none focus:ring-2 focus:ring-[#7372A5]/40 ${
+                  dyslexiaMode
+                    ? 'opacity-60 cursor-not-allowed bg-[#ececf4] border-[#d8d7e8] text-gray-500'
+                    : 'bg-[#ececf4] dark:bg-[#222033] border-[#d8d7e8] dark:border-[#312f45] text-gray-700 dark:text-gray-200 hover:border-[#7372A5]/40'
+                }`}
               >
                 <div className="flex items-center gap-1.5">
                   <span className="material-symbols-outlined text-base text-[#7372A5] dark:text-[#a1a0d3]">
-                    {themeIcon}
+                    {dyslexiaMode ? 'light_mode' : themeIcon}
                   </span>
-                  <span>{themeLabel}</span>
+                  <span>{dyslexiaMode ? 'Light (Dyslexia)' : themeLabel}</span>
                 </div>
-                <span className="text-[10px] text-gray-400">↻</span>
+                {!dyslexiaMode && <span className="text-[10px] text-gray-400">↻</span>}
               </button>
 
               {/* Dyslexia Mode Quick Toggle */}
@@ -394,12 +415,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <div className="flex flex-col items-center gap-2">
               <button
                 onClick={cycleTheme}
-                title={`Theme: ${themeLabel}`}
+                disabled={dyslexiaMode}
+                title={
+                  dyslexiaMode
+                    ? 'Theme locked to Light while Dyslexia Mode is ON'
+                    : `Theme: ${themeLabel}`
+                }
                 aria-label={`Switch theme, currently ${themeLabel}`}
-                className="w-10 h-10 rounded-xl bg-[#ececf4] dark:bg-[#222033] border border-[#d8d7e8] dark:border-[#312f45] flex items-center justify-center text-gray-700 dark:text-gray-200 hover:border-[#7372A5]/40 transition-all"
+                className={`w-10 h-10 rounded-xl bg-[#ececf4] dark:bg-[#222033] border border-[#d8d7e8] dark:border-[#312f45] flex items-center justify-center text-gray-700 dark:text-gray-200 hover:border-[#7372A5]/40 transition-all ${
+                  dyslexiaMode ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
               >
                 <span className="material-symbols-outlined text-lg leading-none text-[#7372A5] dark:text-[#a1a0d3]">
-                  {themeIcon}
+                  {dyslexiaMode ? 'light_mode' : themeIcon}
                 </span>
               </button>
 
@@ -425,7 +453,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </p>
             )}
             {learnNavItems.map((item) => {
-              const isActive = currentView === item.id;
+              const isActive =
+                currentView === item.id ||
+                (item.id === 'latest-results' && currentView === 'quiz-results');
               return (
                 <button
                   key={item.id}
@@ -495,6 +525,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             isGuest={isGuest}
             collapsed={isCollapsed}
             currentTheme={currentTheme}
+            dyslexiaMode={dyslexiaMode}
             onThemeChange={onThemeChange}
             onNavigate={setCurrentView}
             onSignOut={onSignOut}

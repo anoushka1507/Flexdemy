@@ -48,19 +48,19 @@
     color: var(--text-primary);
   }
 
-  /* Dyslexia Mode: Clean Readable Typography, High Contrast Monochrome Theme */
+  /* Dyslexia Mode: Clean Readable Typography, Dedicated High-Contrast Light Theme */
   body.dyslexia-mode, .dyslexia-mode {
-    font-family: 'Comic Sans MS', 'Comic Neue', 'Comic Relief', cursive, sans-serif !important;
-    letter-spacing: 0.02em !important;
+    font-family: 'OpenDyslexic', 'Comic Sans MS', 'Comic Neue', sans-serif !important;
+    letter-spacing: 0.025em !important;
     word-spacing: 0.08em !important;
-    line-height: 1.6 !important;
-    background-color: #f4f4f6 !important;
-    color: #111111 !important;
+    line-height: 1.65 !important;
+    background-color: #f6f6fa !important;
+    color: #1a192b !important;
   }
 
   body.dyslexia-mode *:not(.material-symbols-outlined) {
-    font-family: 'Comic Sans MS', 'Comic Neue', 'Comic Relief', cursive, sans-serif !important;
-    letter-spacing: 0.02em !important;
+    font-family: 'OpenDyslexic', 'Comic Sans MS', 'Comic Neue', sans-serif !important;
+    letter-spacing: 0.025em !important;
     word-spacing: 0.08em !important;
   }
 
@@ -74,85 +74,63 @@
     display: inline-block !important;
   }
 
-  /* Ensure buttons, badges, pills, and flex elements fit neatly without distorted wrapping */
+  /* Ensure buttons, badges, pills, and switches fit neatly */
   body.dyslexia-mode button,
   body.dyslexia-mode .badge,
   body.dyslexia-mode [role="switch"] {
     white-space: nowrap;
   }
 
-  /* Monochrome Theme Overrides when Dyslexia Mode is Active */
-  body.dyslexia-mode {
-    filter: grayscale(100%);
-  }
-
+  /* Dyslexia Mode Card Surfaces & High-Contrast Typography */
   body.dyslexia-mode .bg-white {
     background-color: #ffffff !important;
-    color: #000000 !important;
-    border-color: #333333 !important;
+    color: #1a192b !important;
+    border-color: #d8d7e8 !important;
   }
 
-  body.dyslexia-mode header,
-  body.dyslexia-mode nav,
-  body.dyslexia-mode aside,
-  body.dyslexia-mode main {
-    background-color: #f8f8f9 !important;
-    color: #000000 !important;
-  }
-
-  body.dyslexia-mode [class*="bg-purple"],
-  body.dyslexia-mode [class*="bg-[#7372A5]"],
-  body.dyslexia-mode [class*="bg-[#6a1b9a]"],
-  body.dyslexia-mode [class*="bg-[#8e24aa]"],
-  body.dyslexia-mode [class*="bg-[#9c27b0]"],
-  body.dyslexia-mode [class*="bg-[#fcf8ff]"],
-  body.dyslexia-mode [class*="bg-[#f4ebf8]"],
-  body.dyslexia-mode [class*="bg-[#f6f6fa]"] {
-    background-color: #e5e5e7 !important;
-    color: #000000 !important;
-  }
-
-  body.dyslexia-mode [class*="text-purple"],
-  body.dyslexia-mode [class*="text-[#7372A5]"],
-  body.dyslexia-mode [class*="text-[#6a1b9a]"],
-  body.dyslexia-mode [class*="text-[#8e24aa]"],
-  body.dyslexia-mode [class*="text-[#2b1836]"] {
-    color: #000000 !important;
-  }
-
-  body.dyslexia-mode [class*="border-purple"],
-  body.dyslexia-mode [class*="border-[#7372A5]"],
-  body.dyslexia-mode [class*="border-[#d8d7e8]"] {
-    border-color: #222222 !important;
-  }
-
-  body.dyslexia-mode button:not([role="switch"]) {
-    border-color: #000000 !important;
-  }
-
-  /* Dyslexia Mode Text Gradients & Background Gradients Overrides */
-  body.dyslexia-mode .bg-clip-text,
-  body.dyslexia-mode .text-transparent {
-    background: transparent !important;
-    background-image: none !important;
-    -webkit-background-clip: unset !important;
-    background-clip: unset !important;
-    color: #000000 !important;
-    -webkit-text-fill-color: #000000 !important;
-  }
-
-  body.dyslexia-mode .bg-gradient-to-r:not(.bg-clip-text),
-  body.dyslexia-mode .bg-gradient-to-tr:not(.bg-clip-text),
-  body.dyslexia-mode .bg-gradient-to-br:not(.bg-clip-text),
-  body.dyslexia-mode .bg-gradient-to-b:not(.bg-clip-text) {
-    background: #e5e5e7 !important;
-    color: #000000 !important;
+  /* Dyslexia Word-Level TTS Highlighting */
+  .dyslexia-highlight-word {
+    background-color: #fef08a !important; /* bright amber yellow */
+    color: #713f12 !important; /* dark readable amber text */
+    border-radius: 4px;
+    padding: 0 4px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
   }
 
   /* Fill styling for Material Symbols when icon-fill class is used */
   .material-symbols-outlined.icon-fill {
     font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
   }
+}
+
+/* Accessible Select and Option styling across all browsers and modes */
+select {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+select option {
+  background-color: var(--bg-surface) !important;
+  color: var(--text-primary) !important;
+  padding: 6px 10px;
+}
+.dark select {
+  background-color: #1e1d2c !important;
+  color: #f2f1f8 !important;
+  border-color: #312f45 !important;
+}
+.dark select option {
+  background-color: #1e1d2c !important;
+  color: #f2f1f8 !important;
+}
+body.dyslexia-mode select {
+  background-color: #ffffff !important;
+  color: #1a192b !important;
+  border-color: #d8d7e8 !important;
+}
+body.dyslexia-mode select option {
+  background-color: #ffffff !important;
+  color: #1a192b !important;
 }
 
 /* Automatic Dark Mode fallbacks for common design tokens */

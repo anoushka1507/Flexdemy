@@ -6,6 +6,7 @@ interface AccountMenuProps {
   isGuest: boolean;
   collapsed?: boolean;
   currentTheme: ThemeMode;
+  dyslexiaMode?: boolean;
   onThemeChange: (theme: ThemeMode) => void;
   onNavigate: (view: ViewMode) => void;
   onSignOut: () => Promise<void>;
@@ -16,6 +17,7 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
   isGuest,
   collapsed = false,
   currentTheme,
+  dyslexiaMode = false,
   onThemeChange,
   onNavigate,
   onSignOut,
@@ -144,49 +146,58 @@ export const AccountMenu: React.FC<AccountMenuProps> = ({
             <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 dark:text-gray-400 mb-1.5 px-1">
               Appearance
             </p>
-            <div className="grid grid-cols-3 gap-1 bg-[#ececf4] dark:bg-[#12111d] p-1 rounded-xl">
-              <button
-                type="button"
-                onClick={() => onThemeChange('light')}
-                title="Light Theme"
-                className={`flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  currentTheme === 'light'
-                    ? 'bg-white dark:bg-[#222138] text-[#7372A5] dark:text-[#a1a0d3] shadow-xs'
-                    : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-sm">light_mode</span>
-                <span>Light</span>
-              </button>
+            {dyslexiaMode ? (
+              <div className="bg-[#ececf4] dark:bg-[#1f1d2e] p-2.5 rounded-xl border border-[#d8d7e8] dark:border-[#312f45] text-[11px] text-[#222138] dark:text-[#f2f1f8] leading-tight">
+                <span className="font-bold text-[#7372A5] dark:text-[#a1a0d3] block mb-1">
+                  Dyslexia Mode Active
+                </span>
+                Theme is locked to High-Readability Light. Turn off Dyslexia Mode in Settings or Sidebar to switch themes.
+              </div>
+            ) : (
+              <div className="grid grid-cols-3 gap-1 bg-[#ececf4] dark:bg-[#12111d] p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => onThemeChange('light')}
+                  title="Light Theme"
+                  className={`flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                    currentTheme === 'light'
+                      ? 'bg-white dark:bg-[#222138] text-[#7372A5] dark:text-[#a1a0d3] shadow-xs'
+                      : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-sm">light_mode</span>
+                  <span>Light</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => onThemeChange('dark')}
-                title="Dark Theme"
-                className={`flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  currentTheme === 'dark'
-                    ? 'bg-white dark:bg-[#222138] text-[#7372A5] dark:text-[#a1a0d3] shadow-xs'
-                    : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-sm">dark_mode</span>
-                <span>Dark</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => onThemeChange('dark')}
+                  title="Dark Theme"
+                  className={`flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                    currentTheme === 'dark'
+                      ? 'bg-white dark:bg-[#222138] text-[#7372A5] dark:text-[#a1a0d3] shadow-xs'
+                      : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-sm">dark_mode</span>
+                  <span>Dark</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => onThemeChange('system')}
-                title="System Theme"
-                className={`flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-bold transition-all ${
-                  currentTheme === 'system'
-                    ? 'bg-white dark:bg-[#222138] text-[#7372A5] dark:text-[#a1a0d3] shadow-xs'
-                    : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
-                }`}
-              >
-                <span className="material-symbols-outlined text-sm">desktop_windows</span>
-                <span>Auto</span>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => onThemeChange('system')}
+                  title="System Theme"
+                  className={`flex items-center justify-center gap-1 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                    currentTheme === 'system'
+                      ? 'bg-white dark:bg-[#222138] text-[#7372A5] dark:text-[#a1a0d3] shadow-xs'
+                      : 'text-gray-500 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-sm">desktop_windows</span>
+                  <span>Auto</span>
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Sign Out Action */}

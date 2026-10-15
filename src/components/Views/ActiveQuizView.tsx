@@ -203,13 +203,28 @@ export const ActiveQuizView: React.FC<
   // ----------------------------------------------------------
 
   useEffect(() => {
-
-    setQuestions(
-      quiz.questions
-    );
-
+    setQuestions(quiz.questions);
     setCurrentQuestionIndex(0);
-    setSelectedAnswers({});
+
+    // Attempt to restore in-progress answers if previously answering this quiz
+    try {
+      const savedAnswers = localStorage.getItem(`flexdemy_quiz_answers_${quiz.id}`);
+      if (savedAnswers) {
+        setSelectedAnswers(JSON.parse(savedAnswers));
+      } else {
+        setSelectedAnswers({});
+      }
+      const savedOpen = localStorage.getItem(`flexdemy_quiz_open_${quiz.id}`);
+      if (savedOpen) {
+        setOpenAnswers(JSON.parse(savedOpen));
+      } else {
+        setOpenAnswers({});
+      }
+    } catch {
+      setSelectedAnswers({});
+      setOpenAnswers({});
+    }
+
     setFlaggedQuestions({});
     setReviewLaterQuestions({});
     setShowHint({});
@@ -218,11 +233,24 @@ export const ActiveQuizView: React.FC<
     setFeedbackState({});
     setPendingNextQuestion(null);
     setAnsweredCorrectly({});
+  }, [quiz.id, adaptiveSessionId]);
 
-  }, [
-  quiz.id,
-  adaptiveSessionId,
-]);
+  // Persist answers in background so navigation / refresh doesn't drop answers
+  useEffect(() => {
+    try {
+      if (Object.keys(selectedAnswers).length > 0) {
+        localStorage.setItem(`flexdemy_quiz_answers_${quiz.id}`, JSON.stringify(selectedAnswers));
+      }
+    } catch {}
+  }, [selectedAnswers, quiz.id]);
+
+  useEffect(() => {
+    try {
+      if (Object.keys(openAnswers).length > 0) {
+        localStorage.setItem(`flexdemy_quiz_open_${quiz.id}`, JSON.stringify(openAnswers));
+      }
+    } catch {}
+  }, [openAnswers, quiz.id]);
 
 
   const currentQuestion =
@@ -793,6 +821,11 @@ export const ActiveQuizView: React.FC<
         finalQuestions.length,
     };
 
+
+    try {
+      localStorage.removeItem(`flexdemy_quiz_answers_${quiz.id}`);
+      localStorage.removeItem(`flexdemy_quiz_open_${quiz.id}`);
+    } catch {}
 
     onCompleteQuiz(
       result,
@@ -1468,8 +1501,8 @@ export const ActiveQuizView: React.FC<
               <div
                 className={`p-5 rounded-2xl border-2 transition-all space-y-3 ${
                   feedbackState[currentQuestion.id].wasCorrect
-                    ? 'bg-emerald-50/90 border-emerald-300 text-emerald-950'
-                    : 'bg-rose-50/90 border-rose-300 text-rose-950'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/50 border-emerald-300 dark:border-emerald-700 text-emerald-950 dark:text-emerald-100'
+                    : 'bg-rose-50 dark:bg-rose-950/50 border-rose-300 dark:border-rose-700 text-rose-950 dark:text-rose-100'
                 }`}
               >
                 <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -1491,7 +1524,7 @@ export const ActiveQuizView: React.FC<
                   </div>
 
                   {feedbackState[currentQuestion.id].sourceLocator && (
-                    <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-white border border-gray-200 text-[#7372A5] flex items-center gap-1.5 shadow-2xs">
+                    <span className="text-[11px] font-bold px-3 py-1 rounded-full bg-white dark:bg-[#1e1d2c] border border-[#d8d7e8] dark:border-[#312f45] text-[#7372A5] dark:text-[#a1a0d3] flex items-center gap-1.5 shadow-2xs">
                       <span className="material-symbols-outlined text-xs">menu_book</span>
                       <span>Source: {feedbackState[currentQuestion.id].sourceLocator}</span>
                     </span>
@@ -1499,7 +1532,7 @@ export const ActiveQuizView: React.FC<
                 </div>
 
                 {feedbackState[currentQuestion.id].misconception && (
-                  <div className="bg-rose-100/90 border border-rose-300 px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-900 flex items-start gap-2">
+                  <div className="bg-rose-100 dark:bg-rose-900/60 border border-rose-300 dark:border-rose-700 px-3.5 py-2 rounded-xl text-xs font-semibold text-rose-950 dark:text-rose-100 flex items-start gap-2">
                     <span className="text-sm">⚠️</span>
                     <div>
                       <span className="font-extrabold block">Identified Misconception:</span>
@@ -1508,7 +1541,13 @@ export const ActiveQuizView: React.FC<
                   </div>
                 )}
 
-                <p className="text-xs font-medium leading-relaxed text-gray-700">
+                <p
+                  className={`text-xs font-semibold leading-relaxed ${
+                    feedbackState[currentQuestion.id].wasCorrect
+                      ? 'text-emerald-950 dark:text-emerald-100'
+                      : 'text-rose-950 dark:text-rose-100'
+                  }`}
+                >
                   {feedbackState[currentQuestion.id].explanation}
                 </p>
               </div>

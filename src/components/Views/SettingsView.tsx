@@ -208,15 +208,27 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </p>
             </div>
 
+            {dyslexiaMode && (
+              <div className="p-3 rounded-2xl bg-[#ececf4] dark:bg-[#1f1d2e] border border-[#d8d7e8] dark:border-[#312f45] text-xs text-[#222138] dark:text-[#f2f1f8] flex items-center gap-2.5">
+                <span className="material-symbols-outlined text-[#7372A5] dark:text-[#a1a0d3] text-lg">info</span>
+                <span>
+                  Theme selection is locked to High-Readability Light while <strong>Dyslexia Mode</strong> is active. Turn off Dyslexia Mode below to choose Dark or System theme.
+                </span>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <button
                 type="button"
+                disabled={dyslexiaMode}
                 onClick={() => {
                   setTheme('light');
                   handleApplySetting({ theme: 'light' });
                 }}
                 className={`p-4 rounded-2xl border text-left transition-all flex flex-col justify-between h-24 ${
-                  theme === 'light'
+                  dyslexiaMode
+                    ? 'opacity-60 cursor-not-allowed border-[#d8d7e8] dark:border-[#312f45] bg-[#ececf4]/40'
+                    : theme === 'light'
                     ? 'border-[#7372A5] dark:border-[#a1a0d3] bg-[#ececf4]/60 dark:bg-[#252338] ring-2 ring-[#7372A5]/30'
                     : 'border-[#d8d7e8] dark:border-[#312f45] bg-[#fcf8ff] dark:bg-[#1a1926] hover:border-gray-400'
                 }`}
@@ -237,12 +249,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
               <button
                 type="button"
+                disabled={dyslexiaMode}
                 onClick={() => {
                   setTheme('dark');
                   handleApplySetting({ theme: 'dark' });
                 }}
                 className={`p-4 rounded-2xl border text-left transition-all flex flex-col justify-between h-24 ${
-                  theme === 'dark'
+                  dyslexiaMode
+                    ? 'opacity-60 cursor-not-allowed border-[#d8d7e8] dark:border-[#312f45] bg-[#ececf4]/40'
+                    : theme === 'dark'
                     ? 'border-[#7372A5] dark:border-[#a1a0d3] bg-[#ececf4]/60 dark:bg-[#252338] ring-2 ring-[#7372A5]/30'
                     : 'border-[#d8d7e8] dark:border-[#312f45] bg-[#fcf8ff] dark:bg-[#1a1926] hover:border-gray-400'
                 }`}
@@ -263,12 +278,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
               <button
                 type="button"
+                disabled={dyslexiaMode}
                 onClick={() => {
                   setTheme('system');
                   handleApplySetting({ theme: 'system' });
                 }}
                 className={`p-4 rounded-2xl border text-left transition-all flex flex-col justify-between h-24 ${
-                  theme === 'system'
+                  dyslexiaMode
+                    ? 'opacity-60 cursor-not-allowed border-[#d8d7e8] dark:border-[#312f45] bg-[#ececf4]/40'
+                    : theme === 'system'
                     ? 'border-[#7372A5] dark:border-[#a1a0d3] bg-[#ececf4]/60 dark:bg-[#252338] ring-2 ring-[#7372A5]/30'
                     : 'border-[#d8d7e8] dark:border-[#312f45] bg-[#fcf8ff] dark:bg-[#1a1926] hover:border-gray-400'
                 }`}
@@ -793,7 +811,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <ul className="list-disc list-inside space-y-1 text-[11px] text-gray-500 dark:text-gray-400">
                 <li>Quiz attempt records, scores, and completion timestamps.</li>
                 <li>Bayesian Knowledge Tracing (BKT) topic mastery probabilities.</li>
-                <li>Extracted concepts and prerequisites for Course Flow DAG.</li>
+                <li>Extracted concepts and topic connections for Course Learning Paths.</li>
+                <li>Saved learning paths and flashcard review schedules.</li>
                 <li>Ingested multi-file collections and citations.</li>
               </ul>
             </div>

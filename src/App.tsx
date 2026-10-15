@@ -12,7 +12,7 @@ import {
 
 import { supabase } from './supabaseClient';
 import { apiFetch } from './utils/api';
-import { getStoredTheme, applyTheme, subscribeToSystemTheme } from './utils/theme';
+import { getStoredTheme, applyTheme, subscribeToSystemTheme, syncThemeWithDyslexia } from './utils/theme';
 
 import {
   INITIAL_USER_PROFILE,
@@ -22,7 +22,7 @@ import {
 import { Sidebar } from './components/Sidebar';
 import { QuizUploadModal } from './components/QuizUploadModal';
 import { MasteryPanel } from './components/MasteryPanel';
-import { CourseFlowMapModal } from './components/CourseFlowMapModal';
+import { CourseFlowMapModal, SavedLearningPathData } from './components/CourseFlowMapModal';
 import { Toast } from './components/Toast';
 
 import { LoginView } from './components/Views/LoginView';
@@ -30,6 +30,8 @@ import { LandingView } from './components/Views/LandingView';
 import { DashboardView } from './components/Views/DashboardView';
 import { ActiveQuizView } from './components/Views/ActiveQuizView';
 import { ResultsView } from './components/Views/ResultsView';
+import { LatestResultsView } from './components/Views/LatestResultsView';
+import { FlashcardRevisionView } from './components/Views/FlashcardRevisionView';
 import { ProfileView } from './components/Views/ProfileView';
 import { SettingsView } from './components/Views/SettingsView';
 
@@ -90,12 +92,27 @@ export default function App() {
     }[]
   >([]);
 
-  const [activeQuiz, setActiveQuiz] = useState<Quiz>(SAMPLE_QUIZZES[0]);
+  const [activeQuiz, setActiveQuiz] = useState<Quiz>(() => {
+    try {
+      const saved = localStorage.getItem('flexdemy_active_quiz');
+      return saved ? JSON.parse(saved) : SAMPLE_QUIZZES[0];
+    } catch {
+      return SAMPLE_QUIZZES[0];
+    }
+  });
   const [adaptiveSessionId, setAdaptiveSessionId] = useState<string | undefined>(undefined);
-  const [quizResult, setQuizResult] = useState<QuizResult | null>(null);
+  const [quizResult, setQuizResult] = useState<QuizResult | null>(() => {
+    try {
+      const saved = localStorage.getItem('flexdemy_active_quiz_result');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [resultsInitialTab, setResultsInitialTab] = useState<'review' | 'insights'>('review');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState<boolean>(false);
   const [isCourseMapOpen, setIsCourseMapOpen] = useState<boolean>(false);
+  const [activeSavedPath, setActiveSavedPath] = useState<SavedLearningPathData | null>(null);
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
 
   // ==========================================================
@@ -130,14 +147,10 @@ export default function App() {
     }
   };
 
-  // Dyslexia Mode effect
+  // Dyslexia Mode effect (Strictly bypasses dark mode while active, restores theme upon deactivation)
   useEffect(() => {
-    if (dyslexiaMode) {
-      document.body.classList.add('dyslexia-mode');
-    } else {
-      document.body.classList.remove('dyslexia-mode');
-    }
-  }, [dyslexiaMode]);
+    syncThemeWithDyslexia(dyslexiaMode, currentTheme);
+  }, [dyslexiaMode, currentTheme]);
 
   // ==========================================================
   // AUTH & PERSISTENT LEARNER PROFILE HYDRATION
@@ -422,6 +435,10 @@ export default function App() {
     } catch (err) {
       console.warn('Sign out threw:', err);
     }
+    try {
+      localStorage.removeItem('flexdemy_active_quiz_result');
+      localStorage.removeItem('flexdemy_active_quiz');
+    } catch {}
     setCurrentView('login');
     setQuizResults([]);
     setQuizzesList([]);
@@ -436,6 +453,10 @@ export default function App() {
     try {
       const resp = await apiFetch('/api/reset-learning-data', { method: 'POST' });
       if (resp.ok) {
+        try {
+          localStorage.removeItem('flexdemy_active_quiz_result');
+          localStorage.removeItem('flexdemy_active_quiz');
+        } catch {}
         setQuizResults([]);
         setRecentHistory([]);
         setQuizzesList([]);
@@ -537,6 +558,14 @@ export default function App() {
     })();
 
     setQuizResult(result);
+    try {
+      localStorage.setItem('flexdemy_active_quiz_result', JSON.stringify(result));
+      if (completedQuiz || activeQuiz) {
+        localStorage.setItem('flexdemy_active_quiz', JSON.stringify(completedQuiz || activeQuiz));
+      }
+    } catch {
+      // ignore
+    }
     setRecentHistory((prev) => [
       {
         id: result.quizId,
@@ -602,6 +631,11 @@ export default function App() {
       };
 
       setQuizResult(reconstructed);
+      try {
+        localStorage.setItem('flexdemy_active_quiz_result', JSON.stringify(reconstructed));
+      } catch {
+        // ignore
+      }
       setAdaptiveSessionId(match.session_id || undefined);
       setResultsInitialTab('insights');
       setCurrentView('quiz-results');
@@ -670,20 +704,25 @@ export default function App() {
   // RESULTS VIEW
   // ==========================================================
 
-  if (currentView === 'quiz-results' && quizResult) {
-    return (
-      <ResultsView
-        quizResult={quizResult}
-        quiz={activeQuiz}
-        setCurrentView={setCurrentView}
-        dyslexiaMode={dyslexiaMode}
-        setDyslexiaMode={setDyslexiaMode}
-        onRetakeQuiz={() => handleStartQuiz(activeQuiz)}
-        onStartAnotherQuiz={() => setCurrentView('landing')}
-        sessionId={adaptiveSessionId}
-        initialTab={resultsInitialTab}
-      />
-    );
+  if (currentView === 'quiz-results') {
+    if (quizResult) {
+      return (
+        <ResultsView
+          quizResult={quizResult}
+          quiz={activeQuiz}
+          setCurrentView={setCurrentView}
+          dyslexiaMode={dyslexiaMode}
+          setDyslexiaMode={setDyslexiaMode}
+          onRetakeQuiz={() => handleStartQuiz(activeQuiz)}
+          onStartAnotherQuiz={() => setCurrentView('landing')}
+          sessionId={adaptiveSessionId}
+          initialTab={resultsInitialTab}
+        />
+      );
+    } else {
+      // Fallback if results view reached without an in-memory result
+      setCurrentView('latest-results');
+    }
   }
 
   // ==========================================================
@@ -731,6 +770,28 @@ export default function App() {
               isGuest={isGuest}
               onShowToast={showToast}
               onNavigate={setCurrentView}
+              onOpenUploadModal={() => setIsUploadModalOpen(true)}
+              onOpenLearningPath={(path) => {
+                setActiveSavedPath(path);
+                setIsCourseMapOpen(true);
+              }}
+            />
+          )}
+
+          {currentView === 'latest-results' && (
+            <LatestResultsView
+              setCurrentView={setCurrentView}
+              onOpenQuizResult={handleOpenQuizResult}
+              onStartQuiz={() => setIsUploadModalOpen(true)}
+              isGuest={isGuest}
+            />
+          )}
+
+          {currentView === 'flashcards' && (
+            <FlashcardRevisionView
+              setCurrentView={setCurrentView}
+              onOpenUploadModal={() => setIsUploadModalOpen(true)}
+              onShowToast={showToast}
             />
           )}
 
@@ -878,7 +939,11 @@ export default function App() {
 
       <CourseFlowMapModal
         isOpen={isCourseMapOpen}
-        onClose={() => setIsCourseMapOpen(false)}
+        onClose={() => {
+          setIsCourseMapOpen(false);
+          setActiveSavedPath(null);
+        }}
+        initialPath={activeSavedPath}
         onPracticeTopic={() => setIsUploadModalOpen(true)}
       />
     </div>

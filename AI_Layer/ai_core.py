@@ -1409,27 +1409,68 @@ def _cosine_similarity(
     return dot / (norm_a * norm_b)
 
 
-def _lexical_similarity(query: str, text: str) -> float:
+STOP_WORDS = {
+    "what", "is", "are", "the", "a", "an", "can", "you", "tell", "me", "about",
+    "how", "does", "do", "of", "in", "to", "for", "with", "on", "at", "by", "from",
+    "which", "why", "who", "whom", "whose", "and", "or", "between", "explain",
+    "describe", "give", "example", "please", "would", "could", "should", "their",
+    "there", "this", "that", "these", "those", "mean", "meaning", "definition",
+}
+
+
+def _lexical_similarity(
+    query: str,
+    text: str,
+    history_context: str = "",
+) -> float:
     import re
-    q_words = set(w for w in re.findall(r"\w+", query.lower()) if len(w) > 2)
-    if not q_words:
+    raw_words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2]
+    if not raw_words:
         return 0.0
-    t_words = set(w for w in re.findall(r"\w+", text.lower()) if len(w) > 2)
+
+    content_words = [w for w in raw_words if w not in STOP_WORDS]
+    q_words = content_words if content_words else raw_words
+
+    t_words = set(re.findall(r"\w+", text.lower()))
     if not t_words:
         return 0.0
 
-    exact_matches = q_words & t_words
-    stemmed_matches = set()
-    for qw in q_words - exact_matches:
-        qw_stem = qw.rstrip("s").rstrip("ing").rstrip("ed")
-        for tw in t_words:
-            tw_stem = tw.rstrip("s").rstrip("ing").rstrip("ed")
-            if (len(qw_stem) >= 3 and qw_stem == tw_stem) or (len(qw) >= 4 and (qw in tw or tw in qw)):
-                stemmed_matches.add(qw)
-                break
+    # 1. Primary Query Scoring (exact: 1.0, prefix stem >= 4 chars: 0.75)
+    q_score = 0.0
+    for qw in q_words:
+        if qw in t_words:
+            q_score += 1.0
+        else:
+            prefix = qw[:min(len(qw), 5)]
+            if len(prefix) >= 4:
+                for tw in t_words:
+                    if len(tw) >= 4 and (tw.startswith(prefix) or qw.startswith(tw[:min(len(tw), 5)])):
+                        q_score += 0.75
+                        break
 
-    total_matches = len(exact_matches) + len(stemmed_matches)
-    return total_matches / len(q_words)
+    # 2. Contextual History Boost (weight: 0.25)
+    h_score = 0.0
+    h_weight = 0.0
+    if history_context:
+        raw_h_words = [
+            w for w in re.findall(r"\w+", history_context.lower())
+            if len(w) > 3 and w not in STOP_WORDS and w not in q_words
+        ]
+        if raw_h_words:
+            h_weight = 0.25 * min(4, len(raw_h_words))
+            for hw in raw_h_words[:4]:
+                if hw in t_words:
+                    h_score += 0.25
+
+    total_score = (q_score + h_score) / (len(q_words) + h_weight)
+    return total_score
+
+
+def format_source_locator(chunk: Chunk) -> str:
+    """Format locator with filename if available for multi-file collections."""
+    if chunk.source_filename:
+        return f"{chunk.source_filename}, {chunk.locator}"
+    return chunk.locator
 
 
 async def retrieve_relevant_chunks(
@@ -1437,15 +1478,22 @@ async def retrieve_relevant_chunks(
     chunk_embeddings: list[list[float]] | None,
     query: str,
     k: int = 4,
+    conversation_history: list[ChatTurn] | None = None,
 ) -> list[tuple[Chunk, float]]:
 
     if not chunks:
         return []
 
+    history_context = ""
+    if conversation_history:
+        recent_turns = conversation_history[-2:]
+        history_context = " ".join(t.text for t in recent_turns)
+
     # Attempt semantic vector cosine retrieval when embeddings & client available
     if chunk_embeddings and len(chunk_embeddings) == len(chunks) and client is not None:
         try:
-            query_embedding = (await embed_texts([query]))[0]
+            effective_query = f"{query} {history_context[:100]}".strip()
+            query_embedding = (await embed_texts([effective_query]))[0]
             scored = [
                 (chunk, _cosine_similarity(query_embedding, embedding))
                 for chunk, embedding in zip(chunks, chunk_embeddings)
@@ -1457,7 +1505,7 @@ async def retrieve_relevant_chunks(
 
     # Deterministic lexical overlap fallback (0 LLM tokens, works offline)
     scored = [
-        (chunk, _lexical_similarity(query, chunk.text))
+        (chunk, _lexical_similarity(query, chunk.text, history_context=history_context))
         for chunk in chunks
     ]
     scored.sort(key=lambda pair: pair[1], reverse=True)
@@ -1508,8 +1556,33 @@ async def generate_flashcards(
                 return local_cards
 
     if client is None:
+        local_cards: list[Flashcard] = []
+        for i, chunk in enumerate(chunks):
+            loc = chunk.locator
+            lines = [l.strip() for l in chunk.text.split("\n") if len(l.strip()) > 10]
+            front_text = f"Key principle from {loc}" if not lines else lines[0][:120]
+            back_text = chunk.text.strip()[:350]
+            local_cards.append(
+                Flashcard(
+                    front=front_text,
+                    back=back_text,
+                    source_locator=loc,
+                )
+            )
+            if len(chunks) == 1 and len(chunk.text) > 30 and count >= 2:
+                local_cards.append(
+                    Flashcard(
+                        front=f"Core application: {topic}",
+                        back=f"Key application of {topic} in practice: {chunk.text.strip()[:300]}",
+                        source_locator=loc,
+                    )
+                )
+            if len(local_cards) >= count:
+                break
+        if local_cards:
+            return local_cards[:count]
         raise QuestionGenerationError(
-            "Gemini client is not initialized."
+            "Gemini client is not initialized and no material chunks found."
         )
 
     top_matches = await retrieve_relevant_chunks(
@@ -1523,7 +1596,7 @@ async def generate_flashcards(
         return []
 
     context_blocks = "\n\n".join(
-        f"[Source: {chunk.locator}]\n{chunk.text}"
+        f"[Source: {format_source_locator(chunk)}]\n{chunk.text}"
         for chunk, _score in top_matches
     )
 
@@ -1576,12 +1649,12 @@ async def answer_grounded_question(
             chunk_embeddings,
             student_message,
             k=3,
+            conversation_history=conversation_history,
         )
         if not top_matches or top_matches[0][1] < 0.20:
             return GroundedChatResponse(
                 answer=(
-                    "[Offline Retrieval Notice] No sufficiently relevant passages "
-                    "found in your uploaded material for this query."
+                    "The available material does not contain enough information to answer this question."
                 ),
                 is_grounded=False,
                 citations=[],
@@ -1592,7 +1665,7 @@ async def answer_grounded_question(
                 f"[Offline Mode — Direct Excerpt Retrieval]\n"
                 f"Generative AI synthesis is unavailable (GEMINI_API_KEY not configured). "
                 f"Aapke uploaded notes se relevant passage ({best_chunk.locator}):\n\n"
-                f'"{best_chunk.text[:300]}..."\n\n'
+                f'"{best_chunk.text.strip()[:350]}"\n\n'
                 f"[Source: {best_chunk.locator}]"
             )
         else:
@@ -1600,7 +1673,7 @@ async def answer_grounded_question(
                 f"[Offline Mode — Direct Excerpt Retrieval]\n"
                 f"Generative AI synthesis is unavailable (GEMINI_API_KEY not configured). "
                 f"Relevant passage from your notes ({best_chunk.locator}):\n\n"
-                f'"{best_chunk.text[:300]}..."\n\n'
+                f'"{best_chunk.text.strip()[:350]}"\n\n'
                 f"[Source: {best_chunk.locator}]"
             )
 
@@ -1625,22 +1698,21 @@ async def answer_grounded_question(
         chunk_embeddings,
         student_message,
         k=4,
+        conversation_history=conversation_history,
     )
 
     if not top_matches or top_matches[0][1] < GROUNDING_THRESHOLD:
 
         return GroundedChatResponse(
             answer=(
-                "I can't find anything in your uploaded material "
-                "that covers this. Try rephrasing, or ask about a "
-                "topic that's in your notes."
+                "The available material does not contain enough information to answer this question."
             ),
             is_grounded=False,
             citations=[],
         )
 
     context_blocks = "\n\n".join(
-        f"[Source: {chunk.locator}]\n{chunk.text}"
+        f"[Source: {format_source_locator(chunk)}]\n{chunk.text}"
         for chunk, _score in top_matches
     )
 
@@ -1668,11 +1740,11 @@ async def answer_grounded_question(
         "You are an encouraging study tutor that must answer ONLY using the "
         "source excerpts below. Cite the exact [Source: ...] tag(s) "
         "you used inline in your answer. If the excerpts don't "
-        "actually answer the question, say so clearly instead of guessing.\n\n"
+        "actually answer the question, say clearly 'The available material does not contain enough information to answer this question.' instead of guessing.\n\n"
         f"Language Requirement: {language_instruction}\n"
         f"Style Requirement: {style_instruction}\n\n"
         "CRITICAL REQUIREMENT: Always preserve exact source locators in square brackets "
-        "(e.g., [Source: Page 2] or [Source: 01:23]) exactly as they appear in the source excerpts. "
+        "(e.g., [Source: Page 2] or [Source: lecture.pdf, Slide 3]) exactly as they appear in the source excerpts. "
         "Do not translate, alter, or omit locator strings.\n\n"
         f"Source excerpts:\n{context_blocks}\n\n"
         f"Conversation so far:\n{history_text}\n\n"
@@ -1701,11 +1773,14 @@ async def answer_grounded_question(
         "the excerpts do not provide",
         "does not mention this",
         "[unsupported_by_material]",
+        "does not contain enough information",
+        "not explained in the material",
+        "not covered in the material",
     )
 
     if any(trigger in answer_lower for trigger in REFUSAL_TRIGGERS):
         return GroundedChatResponse(
-            answer=answer_text,
+            answer="The available material does not contain enough information to answer this question.",
             is_grounded=False,
             citations=[],
         )
@@ -1714,13 +1789,17 @@ async def answer_grounded_question(
     # Never attach citations solely based on high retrieval similarity
     used_chunks = []
     for chunk, score in top_matches:
-        loc_str = chunk.locator.lower()
+        loc_str = format_source_locator(chunk).lower()
+        raw_loc = chunk.locator.lower()
+        fn = (chunk.source_filename or "").lower()
         if (
             f"[source: {loc_str}]" in answer_lower
+            or f"[source: {raw_loc}]" in answer_lower
             or f"[{loc_str}]" in answer_lower
-            or f"source: {loc_str}" in answer_lower
+            or f"[{raw_loc}]" in answer_lower
             or loc_str in answer_lower
-            or (chunk.source_filename and chunk.source_filename.lower() in answer_lower)
+            or raw_loc in answer_lower
+            or (fn and fn in answer_lower)
         ):
             used_chunks.append((chunk, score))
 

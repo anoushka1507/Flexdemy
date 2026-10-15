@@ -5,6 +5,8 @@ export type ViewMode =
   | 'active-quiz'
   | 'quiz-results'
   | 'quizzes-list'
+  | 'latest-results'
+  | 'flashcards'
   | 'leaderboard'
   | 'analytics'
   | 'settings'
@@ -56,6 +58,16 @@ export interface Citation {
 
 export type QueueItemStatus = 'queued' | 'uploading' | 'completed' | 'partial' | 'failed' | 'skipped';
 
+export type IngestionStage =
+  | 'waiting'
+  | 'uploading'
+  | 'extracting'
+  | 'indexing'
+  | 'preparing_questions'
+  | 'completed'
+  | 'failed'
+  | 'skipped';
+
 export interface FileQueueItem {
   id: string;
   file: File;
@@ -63,6 +75,8 @@ export interface FileQueueItem {
   size: number;
   format: 'pdf' | 'pptx' | 'text' | 'video' | 'unsupported';
   status: QueueItemStatus;
+  stage?: IngestionStage;
+  progressPercent?: number;
   progress?: number;
   error?: string;
   warnings?: string[];

@@ -118,6 +118,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           )}
 
           <button
+            onClick={() => setCurrentView('flashcards')}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#ececf4] dark:bg-[#252436] hover:bg-[#d8d7e8] dark:hover:bg-[#312f45] text-gray-700 dark:text-gray-200 font-bold text-xs transition-colors shrink-0 border border-[#d8d7e8] dark:border-[#312f45]"
+          >
+            <span className="material-symbols-outlined text-base text-[#7372A5] dark:text-[#a1a0d3]">
+              style
+            </span>
+            <span>Flashcards</span>
+          </button>
+
+          <button
             onClick={() => setCurrentView('quizzes-list')}
             className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#ececf4] dark:bg-[#252436] hover:bg-[#d8d7e8] dark:hover:bg-[#312f45] text-gray-700 dark:text-gray-200 font-bold text-xs transition-colors shrink-0 border border-[#d8d7e8] dark:border-[#312f45]"
           >
@@ -334,10 +344,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 ) : (
                   <>
                     <h3 className="font-extrabold text-base text-[#222138] dark:text-[#f2f1f8]">
-                      Explore Course Map Concepts
+                      Explore Learning Paths
                     </h3>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
-                      Visualize prerequisite dependencies across your documents with the Course Flow Directed Acyclic Graph.
+                      Visualize topic connections and recommended learning sequences across your course documents.
                     </p>
                   </>
                 )}
@@ -348,7 +358,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   onClick={weakestTopicItem ? onOpenUploadModal : onOpenCourseMap}
                   className="w-full py-2.5 rounded-xl bg-[#7372A5] hover:bg-[#5d5c8e] text-white font-bold text-xs shadow-xs transition-colors text-center"
                 >
-                  {weakestTopicItem ? 'Practice Weak Topic' : 'Open Course Flow Map'}
+                  {weakestTopicItem ? 'Practice Weak Topic' : 'Open Learning Path'}
                 </button>
               </div>
             </div>

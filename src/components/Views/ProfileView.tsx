@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, ViewMode } from '../../types';
+import { SavedLearningPathData } from '../CourseFlowMapModal';
+import { apiFetch } from '../../utils/api';
 
 interface ProfileViewProps {
   userProfile: UserProfile;
@@ -7,6 +9,8 @@ interface ProfileViewProps {
   isGuest: boolean;
   onShowToast: (message: string, type?: 'success' | 'error' | 'info') => void;
   onNavigate: (view: ViewMode) => void;
+  onOpenLearningPath?: (path: SavedLearningPathData) => void;
+  onOpenUploadModal?: () => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -15,6 +19,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   isGuest,
   onShowToast,
   onNavigate,
+  onOpenLearningPath,
+  onOpenUploadModal,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -27,6 +33,65 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [studyGoal, setStudyGoal] = useState(userProfile.studyGoal || '');
   const [bio, setBio] = useState(userProfile.bio || '');
   const [avatarUrl, setAvatarUrl] = useState(userProfile.avatarUrl || '');
+
+  // Saved learning paths state
+  const [savedPaths, setSavedPaths] = useState<SavedLearningPathData[]>([]);
+  const [loadingPaths, setLoadingPaths] = useState(false);
+
+  const fetchSavedPaths = async () => {
+    if (isGuest) return;
+    setLoadingPaths(true);
+    try {
+      const res = await apiFetch('/api/learning-paths');
+      if (res.ok) {
+        const data = await res.json();
+        setSavedPaths(data.learning_paths || []);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingPaths(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchSavedPaths();
+  }, [isGuest]);
+
+  const handleDeletePath = async (id?: string) => {
+    if (!id || !confirm('Are you sure you want to delete this saved learning path?')) return;
+    try {
+      const res = await apiFetch(`/api/learning-paths/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        setSavedPaths((prev) => prev.filter((p) => p.id !== id));
+        onShowToast('Learning path deleted', 'info');
+      }
+    } catch {
+      onShowToast('Could not delete learning path', 'error');
+    }
+  };
+
+  const handleRenamePath = async (path: SavedLearningPathData) => {
+    const newTitle = prompt('Enter a new title for this learning path:', path.title);
+    if (!newTitle || !newTitle.trim() || newTitle.trim() === path.title) return;
+    try {
+      const res = await apiFetch('/api/learning-paths', {
+        method: 'POST',
+        body: JSON.stringify({
+          ...path,
+          title: newTitle.trim(),
+        }),
+      });
+      if (res.ok) {
+        setSavedPaths((prev) =>
+          prev.map((p) => (p.id === path.id ? { ...p, title: newTitle.trim() } : p))
+        );
+        onShowToast('Learning path renamed', 'success');
+      }
+    } catch {
+      onShowToast('Could not rename learning path', 'error');
+    }
+  };
 
   // Keep state in sync with prop updates
   useEffect(() => {
@@ -333,10 +398,119 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           <span className="text-base font-bold text-[#222138] dark:text-[#f2f1f8] block mt-1">
             {formattedDate}
           </span>
-          <span className="text-[11px] text-gray-400 mt-1 block">
-            Account ID: {userProfile.id ? userProfile.id.slice(0, 8) + '...' : 'Guest'}
-          </span>
         </div>
+      </div>
+
+      {/* ========================================================
+          MY SAVED LEARNING PATHS SECTION
+      ======================================================== */}
+      <div className="bg-white dark:bg-[#161522] p-6 rounded-3xl border border-[#d8d7e8] dark:border-[#312f45] shadow-xs space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-800">
+          <div>
+            <h2 className="text-base font-extrabold text-[#222138] dark:text-[#f2f1f8]">
+              My Saved Learning Paths
+            </h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              Review, reopen, and practice your personalized topic flows.
+            </p>
+          </div>
+          {onOpenUploadModal && (
+            <button
+              onClick={onOpenUploadModal}
+              className="px-3 py-1.5 rounded-xl bg-[#ececf4] dark:bg-[#252436] hover:bg-[#d8d7e8] dark:hover:bg-[#312f45] text-gray-700 dark:text-gray-200 text-xs font-bold transition-all flex items-center gap-1 border border-[#d8d7e8] dark:border-[#312f45]"
+            >
+              <span className="material-symbols-outlined text-sm text-[#7372A5] dark:text-[#a1a0d3]">
+                add
+              </span>
+              <span>New Path</span>
+            </button>
+          )}
+        </div>
+
+        {loadingPaths && (
+          <div className="py-8 text-center text-xs text-gray-400 font-semibold">
+            Loading saved learning paths...
+          </div>
+        )}
+
+        {!loadingPaths && savedPaths.length === 0 && (
+          <div className="py-8 text-center space-y-2">
+            <span className="material-symbols-outlined text-3xl text-gray-300 dark:text-gray-600">
+              account_tree
+            </span>
+            <p className="text-xs font-bold text-gray-600 dark:text-gray-300">
+              No saved learning paths yet.
+            </p>
+            <p className="text-[11px] text-gray-400 max-w-sm mx-auto">
+              Generate a Learning Path from your uploaded materials and click "Save to My Learning" to keep it here.
+            </p>
+          </div>
+        )}
+
+        {!loadingPaths && savedPaths.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {savedPaths.map((path) => (
+              <div
+                key={path.id}
+                className="p-4 rounded-2xl border border-[#d8d7e8] dark:border-[#312f45] bg-[#f8f8fc] dark:bg-[#1a1926] space-y-3 flex flex-col justify-between hover:border-[#7372A5]/50 transition-all"
+              >
+                <div className="space-y-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="font-extrabold text-sm text-[#222138] dark:text-[#f2f1f8] leading-snug">
+                      {path.title}
+                    </h3>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950/40 text-[#7372A5] dark:text-[#a1a0d3] shrink-0">
+                      {path.concepts.length} concepts
+                    </span>
+                  </div>
+                  {path.source_files && path.source_files.length > 0 && (
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                      Source:{' '}
+                      {path.source_files
+                        .map((f: any) => (typeof f === 'string' ? f : f.name))
+                        .join(', ')}
+                    </p>
+                  )}
+                  {path.created_at && (
+                    <p className="text-[10px] text-gray-400">
+                      Saved on {new Date(path.created_at).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between pt-2 border-t border-gray-200 dark:border-gray-800 text-xs">
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleRenamePath(path)}
+                      className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-xs font-semibold cursor-pointer"
+                      title="Rename this path"
+                    >
+                      Rename
+                    </button>
+                    <span className="text-gray-300 dark:text-gray-700">•</span>
+                    <button
+                      onClick={() => handleDeletePath(path.id)}
+                      className="text-rose-500 hover:text-rose-700 text-xs font-semibold cursor-pointer"
+                      title="Delete this path"
+                    >
+                      Delete
+                    </button>
+                  </div>
+
+                  {onOpenLearningPath && (
+                    <button
+                      onClick={() => onOpenLearningPath(path)}
+                      className="px-3 py-1.5 rounded-xl bg-[#7372A5] hover:bg-[#5d5c8e] text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Open Path</span>
+                      <span className="material-symbols-outlined text-xs">arrow_forward</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

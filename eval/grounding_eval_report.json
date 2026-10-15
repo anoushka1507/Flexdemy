@@ -1,5 +1,5 @@
 {
-  "evaluation_timestamp": "2026-10-14 22:50:10 UTC",
+  "evaluation_timestamp": "2026-10-15 04:27:43 UTC",
   "mode": "offline_retrieval_only",
   "gemini_api_key_configured": false,
   "corpus_file": "eval/material.txt",
@@ -190,8 +190,8 @@
       "is_answerable": false,
       "retrieval_hit": null,
       "retrieved_locators": [
-        "Section 1",
-        "Section 2"
+        "Section 2",
+        "Section 1"
       ],
       "is_grounded": null,
       "refusal_correct": null,

@@ -2,7 +2,7 @@ import { Quiz, UserProfile } from '../types';
 
 export const INITIAL_USER_PROFILE: UserProfile = {
   name: 'Asdaqa Arif',
-  role: 'Student Pro',
+  role: 'Student',
   email: 'alex.johnson@university.edu',
   avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
   totalQuizzesAttempted: 0,
