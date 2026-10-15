@@ -86,6 +86,7 @@ export interface FileQueueItem {
   chunkCount?: number;
   locatorSummary?: string;
   failedStage?: string;
+  collectionId?: string;
 }
 
 export interface MaterialDocumentMetadata {
@@ -143,6 +144,7 @@ export interface UserAnswer {
 
 export interface QuizResult {
   quizId: string;
+  attemptId?: string;
   quizTitle: string;
   scorePercentage: number;
   totalQuestions: number;
@@ -163,6 +165,7 @@ export interface QuizResult {
     total: number;
     masteryPercentage: number;
   }>;
+  questionOutcomes?: any[];
 }
 
 export interface UserProfile {

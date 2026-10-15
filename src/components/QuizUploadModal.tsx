@@ -121,10 +121,24 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
       if (!response.ok) {
         let errDetail = `Topic extraction failed: ${response.status}`;
+        const statusCode = response.status;
         try {
           const errData = await response.json();
           if (errData?.detail) errDetail = errData.detail;
         } catch (_) {}
+
+        if (statusCode === 404 || errDetail.toLowerCase().includes('not found')) {
+          setCollectionId(null);
+          setFileQueue((prev) =>
+            prev.map((it) => ({
+              ...it,
+              status: 'queued',
+              stage: 'waiting',
+              progressPercent: 0,
+              error: undefined,
+            }))
+          );
+        }
         throw new Error(errDetail);
       }
 

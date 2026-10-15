@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import os
+from datetime import datetime, timezone
 
 from dotenv import load_dotenv
 from supabase import create_client, Client
@@ -9,6 +10,10 @@ from supabase import create_client, Client
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+def current_utc_iso() -> str:
+    """Returns current UTC timestamp in ISO 8601 format required by PostgreSQL/PostgREST."""
+    return datetime.now(timezone.utc).isoformat()
 
 SUPABASE_URL = os.getenv("VITE_SUPABASE_URL") or os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = (
@@ -39,12 +44,14 @@ def get_backend_persistence_client(auth_client: Client | None = None) -> Client 
     Returns the secure client for server-side persistence:
     1. Service-role client if configured (preferred on backend server).
     2. User-scoped authenticated client if request has valid user JWT.
-    3. None if guest without server service-role key (graceful in-memory fallback).
+    3. Anon client as capability-token fallback for guest/serverless requests.
     """
     svc = get_service_role_client()
     if svc is not None:
         return svc
-    return auth_client
+    if auth_client is not None:
+        return auth_client
+    return get_anon_client()
 
 
 def get_anon_client() -> Client | None:
@@ -297,7 +304,7 @@ async def save_quiz_session_data(
         payload = {
             "session_id": session_id,
             "session_data": session_json,
-            "updated_at": "now()",
+            "updated_at": current_utc_iso(),
         }
         if user_id:
             payload["user_id"] = user_id
@@ -367,7 +374,7 @@ async def save_quiz_material_data(
             "material_embeddings": embeddings_json,
             "material_content_type": content_type,
             "material_filename": filename,
-            "updated_at": "now()",
+            "updated_at": current_utc_iso(),
         }
 
         if user_id:
@@ -525,11 +532,15 @@ async def record_quiz_result(
     session_id: str | None = None,
     topic_breakdown: list | None = None,
     question_outcomes: list | None = None,
+    attempt_id: str | None = None,
+    user_answers: dict | None = None,
 ) -> bool:
-
-    if client is None or user_id is None:
+    db_client = get_backend_persistence_client(client)
+    if db_client is None or user_id is None:
+        logger.warning("record_quiz_result aborted: db_client or user_id is None (user_id=%s)", user_id)
         return False
 
+    completed_time = current_utc_iso()
     payload = {
         "user_id": user_id,
         "quiz_id": quiz_id,
@@ -542,32 +553,67 @@ async def record_quiz_result(
         "session_id": session_id,
         "topic_breakdown": topic_breakdown,
         "question_outcomes": question_outcomes,
+        "completed_at": completed_time,
+        "status": "completed",
     }
+    if attempt_id:
+        payload["attempt_id"] = attempt_id
+    if user_answers:
+        payload["user_answers"] = user_answers
 
     try:
         # Idempotent upsert on (user_id, quiz_id) prevents double-counting answers
-        client.table("quiz_history").upsert(
+        db_client.table("quiz_history").upsert(
             payload,
             on_conflict="user_id,quiz_id",
         ).execute()
         return True
     except Exception as e:
-        logger.warning("record_quiz_result upsert failed: %s; attempting standard insert", e)
+        logger.warning("record_quiz_result full upsert failed: %s; attempting core schema fallback", e)
+        # Fallback to core fields in case un-migrated database lacks attempt_id/user_answers/status
+        core_payload = {
+            "user_id": user_id,
+            "quiz_id": quiz_id,
+            "quiz_title": quiz_title,
+            "topic": topic,
+            "difficulty": difficulty,
+            "score_percentage": score_percentage,
+            "total_questions": total_questions,
+            "correct_answers_count": correct_answers_count,
+            "session_id": session_id,
+            "topic_breakdown": topic_breakdown,
+            "question_outcomes": question_outcomes,
+            "completed_at": completed_time,
+        }
         try:
-            client.table("quiz_history").insert(payload).execute()
+            db_client.table("quiz_history").upsert(
+                core_payload,
+                on_conflict="user_id,quiz_id",
+            ).execute()
             return True
         except Exception as e2:
-            logger.error("record_quiz_result insert failed: %s", e2)
-            return False
+            logger.warning("record_quiz_result core upsert failed: %s; attempting insert", e2)
+            try:
+                db_client.table("quiz_history").insert(core_payload).execute()
+                return True
+            except Exception as e3:
+                logger.error("record_quiz_result insert failed completely: %s", e3)
+                return False
 
 
-async def fetch_quiz_history(client: Client | None) -> list[dict]:
-
-    if client is None:
+async def fetch_quiz_history(
+    client: Client | None,
+    user_id: str | None = None,
+) -> list[dict]:
+    db_client = get_backend_persistence_client(client)
+    if db_client is None:
         return []
 
     try:
-        result = client.table("quiz_history").select("*").order(
+        query = db_client.table("quiz_history").select("*")
+        if user_id:
+            query = query.eq("user_id", user_id)
+        result = query.order(
             "completed_at", desc=True
         ).limit(50).execute()
 
@@ -612,7 +658,7 @@ async def save_user_preferences(
         payload = {
             "user_id": user_id,
             **preferences,
-            "updated_at": "now()",
+            "updated_at": current_utc_iso(),
         }
         client.table("user_preferences").upsert(
             payload,
@@ -688,7 +734,7 @@ async def save_user_profile(
         payload = {
             "id": user_id,
             **profile_data,
-            "updated_at": "now()",
+            "updated_at": current_utc_iso(),
         }
         client.table("profiles").upsert(
             payload,
@@ -737,37 +783,115 @@ async def reset_user_learning_data(
 # Multi-file ingestion: stable collection IDs survive across cold starts.
 # ============================================================
 
-async def save_material_collection(
-    collection_id: str,
-    collection_data: dict,
-    user_id: str | None = None,
-    auth_client: Client | None = None,
-) -> None:
-    """
-    Persist a serialized MaterialCollection to Supabase material_collections table.
-    Uses upsert on collection_id so re-ingestion updates in place.
-    """
-    client = get_backend_persistence_client(auth_client)
-    if client is None:
-        return
+def is_valid_uuid(val: object) -> bool:
+    """Check if value is a valid UUID string to prevent PostgreSQL syntax errors."""
+    if not val or not isinstance(val, str):
+        return False
+    try:
+        import uuid as _uuid
+        _uuid.UUID(val)
+        return True
+    except (ValueError, AttributeError):
+        return False
 
+
+def _get_collections_disk_dir() -> str:
+    import tempfile
+    d = os.path.join(tempfile.gettempdir(), "flexdemy_material_collections")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _save_collection_to_disk(collection_id: str, data: dict) -> None:
+    if not collection_id or not isinstance(data, dict):
+        return
     try:
         import json as _json
+        p = os.path.join(_get_collections_disk_dir(), f"{collection_id}.json")
+        with open(p, "w", encoding="utf-8") as f:
+            _json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning("Disk cache save failed for collection %s: %s", collection_id, e)
 
+
+def _load_collection_from_disk(collection_id: str) -> dict | None:
+    if not collection_id:
+        return None
+    try:
+        import json as _json
+        p = os.path.join(_get_collections_disk_dir(), f"{collection_id}.json")
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                return _json.load(f)
+    except Exception as e:
+        logger.warning("Disk cache load failed for collection %s: %s", collection_id, e)
+    return None
+
+
+async def save_material_collection(
+    collection_id: object = None,
+    collection_data: object = None,
+    user_id: str | None = None,
+    auth_client: Client | None = None,
+    *args: object,
+    **kwargs: object,
+) -> bool:
+    """
+    Persist a serialized MaterialCollection to disk and Supabase material_collections table.
+    Robust against argument ordering:
+    - Standard: save_material_collection(collection_id, collection_data, user_id=..., auth_client=...)
+    - Positional legacy: save_material_collection(auth_client, user_id, collection_data)
+    """
+    cid = None
+    cdata = None
+
+    if isinstance(collection_id, str) and collection_id.strip():
+        cid = collection_id.strip()
+        cdata = collection_data
+    elif isinstance(collection_data, dict):
+        cdata = collection_data
+        cid = cdata.get("collection_id")
+    elif isinstance(user_id, dict):
+        # Inverted call pattern: save_material_collection(auth_client, user_id, collection_data)
+        auth_client = collection_id if not isinstance(collection_id, str) else auth_client
+        user_id_val = collection_data if isinstance(collection_data, str) else None
+        cdata = user_id
+        user_id = user_id_val
+        cid = cdata.get("collection_id")
+
+    if not cid and isinstance(cdata, dict):
+        cid = cdata.get("collection_id")
+
+    if not cid or not isinstance(cdata, dict):
+        logger.warning("save_material_collection: invalid collection_id=%s or collection_data=%s", cid, type(cdata))
+        return False
+
+    # 1. Always persist to disk cache first for zero-latency local/warm retrieval
+    _save_collection_to_disk(cid, cdata)
+
+    # 2. Persist to Supabase for durable cross-serverless persistence
+    client = get_backend_persistence_client(auth_client)
+    if client is None:
+        return True
+
+    try:
         payload: dict = {
-            "collection_id": collection_id,
-            "collection_data": collection_data,
-            "updated_at": "now()",
+            "collection_id": cid,
+            "collection_data": cdata,
+            "updated_at": current_utc_iso(),
         }
-        if user_id:
+        if user_id and is_valid_uuid(user_id):
             payload["user_id"] = user_id
 
         client.table("material_collections").upsert(
             payload,
             on_conflict="collection_id",
         ).execute()
+        return True
     except Exception as e:
-        logger.warning("save_material_collection failed: %s", e)
+        logger.warning("save_material_collection Supabase upsert failed for %s: %s", cid, e)
+        # Disk cache succeeded, so attempt is not lost
+        return True
 
 
 async def load_material_collection(
@@ -776,35 +900,48 @@ async def load_material_collection(
     auth_client: Client | None = None,
 ) -> dict | None:
     """
-    Load a serialized MaterialCollection from Supabase.
+    Load a serialized MaterialCollection from Supabase or disk cache.
     Returns None if not found or if ownership check fails.
     """
+    if not collection_id or not isinstance(collection_id, str):
+        return None
+    cid = collection_id.strip()
+
+    # 1. Try Supabase first
     client = get_backend_persistence_client(auth_client)
-    if client is None:
-        return None
+    if client is not None:
+        try:
+            result = client.table("material_collections").select(
+                "collection_data, user_id"
+            ).eq("collection_id", cid).limit(1).execute()
 
-    try:
-        result = client.table("material_collections").select(
-            "collection_data, user_id"
-        ).eq("collection_id", collection_id).limit(1).execute()
+            rows = result.data or []
+            if rows and rows[0].get("collection_data"):
+                row = rows[0]
+                owner = row.get("user_id")
+                if owner and user_id and is_valid_uuid(user_id) and owner != user_id:
+                    logger.warning(
+                        "Unauthorized attempt to load collection %s by user %s",
+                        cid, user_id,
+                    )
+                    return None
+                data = row.get("collection_data")
+                if isinstance(data, dict):
+                    _save_collection_to_disk(cid, data)
+                    return data
+        except Exception as e:
+            logger.warning("load_material_collection Supabase query failed for %s: %s", cid, e)
 
-        rows = result.data or []
-        if not rows:
+    # 2. Fallback to local disk cache
+    disk_data = _load_collection_from_disk(cid)
+    if disk_data and isinstance(disk_data, dict):
+        owner = disk_data.get("user_id")
+        if owner and user_id and is_valid_uuid(user_id) and owner != user_id:
+            logger.warning("Unauthorized disk cache access for collection %s by %s", cid, user_id)
             return None
+        return disk_data
 
-        row = rows[0]
-        owner = row.get("user_id")
-        if owner and user_id and owner != user_id:
-            logger.warning(
-                "Unauthorized attempt to load collection %s by user %s",
-                collection_id, user_id,
-            )
-            return None
-
-        return row.get("collection_data")
-    except Exception as e:
-        logger.warning("load_material_collection failed: %s", e)
-        return None
+    return None
 
 
 async def list_user_collections(

@@ -404,6 +404,7 @@ export async function uploadMaterialCollection(
         docId: result.docId,
         chunkCount: result.chunkCount,
         locatorSummary: result.locatorSummary,
+        collectionId: result.collectionId || activeCollectionId,
         error: undefined,
       };
       succeeded++;

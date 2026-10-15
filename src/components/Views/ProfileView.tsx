@@ -11,6 +11,16 @@ interface ProfileViewProps {
   onNavigate: (view: ViewMode) => void;
   onOpenLearningPath?: (path: SavedLearningPathData) => void;
   onOpenUploadModal?: () => void;
+  recentHistory?: Array<{
+    id: string;
+    title: string;
+    topic: string;
+    score: number;
+    date: string;
+    icon: string;
+    difficulty: string;
+  }>;
+  onOpenQuizResult?: (quizId: string) => void;
 }
 
 export const ProfileView: React.FC<ProfileViewProps> = ({
@@ -21,6 +31,8 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onNavigate,
   onOpenLearningPath,
   onOpenUploadModal,
+  recentHistory = [],
+  onOpenQuizResult,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -399,6 +411,91 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             {formattedDate}
           </span>
         </div>
+      </div>
+
+      {/* ========================================================
+          COMPLETED QUIZ ATTEMPTS HISTORY
+      ======================================================== */}
+      <div className="bg-white dark:bg-[#161522] p-6 rounded-3xl border border-[#d8d7e8] dark:border-[#312f45] shadow-xs space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-gray-100 dark:border-gray-800">
+          <div>
+            <h2 className="text-base font-extrabold text-[#222138] dark:text-[#f2f1f8]">
+              Completed Quiz History
+            </h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+              Your persistent record of completed adaptive and practice quizzes.
+            </p>
+          </div>
+          <button
+            onClick={() => onNavigate('latest-results')}
+            className="px-3 py-1.5 rounded-xl bg-[#ececf4] dark:bg-[#252436] hover:bg-[#d8d7e8] dark:hover:bg-[#312f45] text-gray-700 dark:text-gray-200 text-xs font-bold transition-all flex items-center gap-1 border border-[#d8d7e8] dark:border-[#312f45]"
+          >
+            <span className="material-symbols-outlined text-sm text-[#7372A5] dark:text-[#a1a0d3]">
+              fact_check
+            </span>
+            <span>View All in Latest Results</span>
+          </button>
+        </div>
+
+        {recentHistory.length === 0 ? (
+          <div className="py-8 text-center space-y-2">
+            <span className="material-symbols-outlined text-3xl text-gray-300 dark:text-gray-600">
+              quiz
+            </span>
+            <p className="text-xs font-bold text-gray-600 dark:text-gray-300">
+              No completed quizzes yet.
+            </p>
+            <p className="text-[11px] text-gray-400 max-w-sm mx-auto">
+              Complete an adaptive quiz to build your persistent mastery and review history here.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2.5">
+            {recentHistory.map((attempt) => (
+              <div
+                key={attempt.id}
+                className="p-3.5 rounded-2xl bg-[#fcf8ff] dark:bg-[#1a1926] border border-[#d8d7e8] dark:border-[#312f45] flex items-center justify-between gap-3 hover:border-[#7372A5]/40 transition-all"
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-xl bg-[#ececf4] dark:bg-[#252436] text-[#7372A5] dark:text-[#a1a0d3] flex items-center justify-center shrink-0">
+                    <span className="material-symbols-outlined text-base">quiz</span>
+                  </div>
+                  <div className="min-w-0">
+                    <h4 className="text-xs font-bold text-[#222138] dark:text-[#f2f1f8] truncate">
+                      {attempt.title}
+                    </h4>
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                      {attempt.topic} • {attempt.date}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2.5 shrink-0">
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-extrabold border ${
+                      attempt.score >= 80
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 border-emerald-200 dark:border-emerald-800/50'
+                        : attempt.score >= 50
+                        ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border-amber-200 dark:border-amber-800/50'
+                        : 'bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-200 border-rose-200 dark:border-rose-800/50'
+                    }`}
+                  >
+                    {attempt.score}%
+                  </span>
+
+                  {onOpenQuizResult && (
+                    <button
+                      onClick={() => onOpenQuizResult(attempt.id)}
+                      className="px-2.5 py-1 rounded-xl bg-white dark:bg-[#201e30] border border-[#d8d7e8] dark:border-[#312f45] text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-[#ececf4] dark:hover:bg-[#252436] transition-colors"
+                    >
+                      Review
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ========================================================

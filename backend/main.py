@@ -1218,9 +1218,10 @@ async def ingest_collection_api(
     material_collections[cid] = col
     try:
         await save_material_collection(
-            sb_client,
-            user_id,
-            col.model_dump(mode="json"),
+            collection_id=cid,
+            collection_data=col.model_dump(mode="json"),
+            user_id=user_id,
+            auth_client=sb_client,
         )
     except Exception as e:
         logger.warning("save_material_collection error for %s: %s", cid, e)
@@ -1369,9 +1370,14 @@ async def run_ingestion_job(
         if user_id:
             col.user_id = user_id
 
-        # Save to Supabase (best-effort)
+        # Save to disk and Supabase (durable multi-tier persistence)
         try:
-            await save_material_collection(sb_client, user_id, col.model_dump(mode="json"))
+            await save_material_collection(
+                collection_id=cid,
+                collection_data=col.model_dump(mode="json"),
+                user_id=user_id,
+                auth_client=sb_client,
+            )
         except Exception as e:
             logger.warning("save_material_collection error for %s: %s", cid, e)
 
@@ -1489,6 +1495,17 @@ async def upload_file_chunk(
                 )
             )
             col.all_chunks.extend(cached_chunks)
+
+        # Persist updated collection to disk and Supabase
+        try:
+            await save_material_collection(
+                collection_id=cid,
+                collection_data=col.model_dump(mode="json"),
+                user_id=user_id,
+                auth_client=sb_client,
+            )
+        except Exception as e:
+            logger.warning("save_material_collection dedup error for %s: %s", cid, e)
 
         job_record = IngestionJobRecord(
             job_id=job_id,
@@ -1684,10 +1701,15 @@ async def extract_concepts_api(
                     material_collections[cid] = col
                 except Exception as e:
                     logger.warning("Error loading collection %s: %s", cid, e)
-        if col is None or not col.all_chunks:
+        if col is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Material collection '{cid}' not found or contains no extracted chunks.",
+                detail=f"Material collection '{cid}' not found. Please upload your file again or retry.",
+            )
+        if not col.all_chunks:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Material collection '{cid}' was found but contains no readable text chunks. Please ensure the uploaded file has selectable text.",
             )
         if col.user_id and user_id and col.user_id != user_id:
             raise HTTPException(
@@ -1695,7 +1717,7 @@ async def extract_concepts_api(
                 detail="Unauthorized: you do not have permission to access this collection.",
             )
         chunks = col.all_chunks
-        source_filename = col.name or f"Collection ({len(col.documents)} files)"
+        source_filename = col.name or (col.documents[0].filename if col.documents else f"Collection ({len(col.documents)} files)")
 
     # 2. Single-File Mode (Legacy / direct upload)
     elif file is not None:
@@ -2309,6 +2331,27 @@ async def record_answer_and_advance(
         # Store in durable idempotency log
         session.answered_results[request_question_number] = response
         await save_session(session, auth_client=sb_client)
+
+        if user_id:
+            try:
+                correct_count = sum(1 for r in session.answered_results.values() if r.get("was_correct"))
+                tot_q = session.total_questions
+                score_pct = round((correct_count / tot_q) * 100, 1) if tot_q > 0 else 0
+                await record_quiz_result(
+                    sb_client,
+                    user_id,
+                    quiz_id=f"adaptive-{session.session_id}",
+                    quiz_title=session.title,
+                    topic=session.concepts[0].label if session.concepts else "Adaptive Revision",
+                    difficulty=session.current_difficulty,
+                    score_percentage=score_pct,
+                    total_questions=tot_q,
+                    correct_answers_count=correct_count,
+                    session_id=session.session_id,
+                    attempt_id=f"adaptive-{session.session_id}",
+                )
+            except Exception as auto_save_err:
+                logger.warning("Auto-save completed adaptive quiz failed: %s", auto_save_err)
 
         return response
 
@@ -3052,12 +3095,14 @@ class QuizHistoryEntry(BaseModel):
     quiz_title: str
     topic: str = ""
     difficulty: str = "Medium"
-    score_percentage: float
+    score_percentage: float | None = None
     total_questions: int
     correct_answers_count: int
     session_id: str | None = None
     topic_breakdown: list[TopicBreakdownEntry] | None = None
     question_outcomes: list[dict] | None = None
+    attempt_id: str | None = None
+    user_answers: dict | None = None
 
 
 @app.post("/record-quiz-result")
@@ -3065,9 +3110,23 @@ async def record_quiz_result_api(
     request: QuizHistoryEntry,
     authorization: str | None = Header(None),
 ):
-
-    sb_client = get_user_client(authorization)
     user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+
+    if not user_id:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to save your quiz results to your permanent history.",
+        )
+
+    # Validate and calculate final score percentage accurately
+    calculated_score = (
+        round((request.correct_answers_count / request.total_questions) * 100, 1)
+        if request.total_questions > 0
+        else 0.0
+    )
+    score_to_save = request.score_percentage if request.score_percentage is not None else calculated_score
+    attempt_id = request.attempt_id or request.quiz_id
 
     success = await record_quiz_result(
         sb_client,
@@ -3076,7 +3135,7 @@ async def record_quiz_result_api(
         request.quiz_title,
         request.topic,
         request.difficulty,
-        request.score_percentage,
+        score_to_save,
         request.total_questions,
         request.correct_answers_count,
         session_id=request.session_id,
@@ -3086,25 +3145,54 @@ async def record_quiz_result_api(
             else None
         ),
         question_outcomes=request.question_outcomes,
+        attempt_id=attempt_id,
+        user_answers=request.user_answers,
     )
 
-    return {"recorded": success}
+    if not success:
+        raise HTTPException(
+            status_code=500,
+            detail="Database write failed to confirm quiz attempt save. Please retry.",
+        )
+
+    # Re-fetch latest updated profile stats immediately so response contains the verified record
+    history = await fetch_quiz_history(sb_client, user_id=user_id)
+    saved_attempt = next(
+        (h for h in history if h.get("quiz_id") == request.quiz_id or h.get("attempt_id") == attempt_id),
+        None,
+    )
+
+    return {
+        "recorded": True,
+        "quiz_id": request.quiz_id,
+        "attempt_id": attempt_id,
+        "score_percentage": score_to_save,
+        "attempt": saved_attempt or {
+            "quiz_id": request.quiz_id,
+            "quiz_title": request.quiz_title,
+            "score_percentage": score_to_save,
+            "total_questions": request.total_questions,
+            "correct_answers_count": request.correct_answers_count,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        },
+        "history_count": len(history),
+    }
 
 
 @app.get("/quiz-history")
 async def quiz_history_api(
     authorization: str | None = Header(None),
 ):
-
+    user_id = get_user_id(authorization)
     sb_client = get_user_client(authorization)
 
-    if sb_client is None:
+    if not user_id:
         raise HTTPException(
             status_code=401,
             detail="Sign in to view your quiz history.",
         )
 
-    history = await fetch_quiz_history(sb_client)
+    history = await fetch_quiz_history(sb_client, user_id=user_id)
 
     return {"history": history}
 
@@ -3237,7 +3325,7 @@ async def get_learner_profile_api(
     mastery_dict = await fetch_mastery(sb_client)
 
     # 2. Fetch history
-    history = await fetch_quiz_history(sb_client)
+    history = await fetch_quiz_history(sb_client, user_id=user_id)
 
     # 3. Fetch preferences
     prefs = await fetch_user_preferences(sb_client, user_id)

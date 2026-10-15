@@ -116,6 +116,7 @@ export default function App() {
   const [isCourseMapOpen, setIsCourseMapOpen] = useState<boolean>(false);
   const [activeSavedPath, setActiveSavedPath] = useState<SavedLearningPathData | null>(null);
   const [quizResults, setQuizResults] = useState<QuizResult[]>([]);
+  const [learnerDataError, setLearnerDataError] = useState<string | null>(null);
 
   // ==========================================================
   // THEME & ACCESSIBILITY SUBSCRIPTIONS
@@ -165,47 +166,52 @@ export default function App() {
 
   const hydrateLearnerData = async () => {
     try {
+      setLearnerDataError(null);
       const response = await apiFetch('/api/learner-profile');
-      if (response.ok) {
-        const data = await response.json();
-        const rows: any[] = data.history || [];
-        const results: QuizResult[] = rows.map((row) => ({
-          quizId: row.quiz_id,
-          quizTitle: row.quiz_title,
-          scorePercentage: row.score_percentage,
+      if (!response.ok) {
+        throw new Error(`Failed to load learner profile (HTTP ${response.status})`);
+      }
+      const data = await response.json();
+      const rows: any[] = data.history || [];
+      const results: QuizResult[] = rows.map((row) => ({
+        quizId: row.quiz_id,
+        attemptId: row.attempt_id || row.quiz_id,
+        quizTitle: row.quiz_title,
+        scorePercentage: row.score_percentage,
+        totalQuestions: row.total_questions,
+        correctAnswersCount: row.correct_answers_count,
+        incorrectAnswersCount: row.total_questions - row.correct_answers_count,
+        timeSpentSeconds: 0,
+        dateCompleted: row.completed_at,
+        userAnswers: row.user_answers || {},
+        topicBreakdown: row.topic_breakdown || [],
+        questionOutcomes: row.question_outcomes || undefined,
+      }));
+      setQuizResults(results);
+
+      setQuizzesList(
+        rows.map((row) => ({
+          id: row.quiz_id,
+          title: row.quiz_title,
+          topic: row.topic || row.quiz_title,
+          difficulty: (row.difficulty || 'Medium') as Quiz['difficulty'],
+          questions: [],
           totalQuestions: row.total_questions,
-          correctAnswersCount: row.correct_answers_count,
-          incorrectAnswersCount: row.total_questions - row.correct_answers_count,
-          timeSpentSeconds: 0,
-          dateCompleted: row.completed_at,
-          userAnswers: {},
-          topicBreakdown: [],
-        }));
-        setQuizResults(results);
+          isFromHistory: true,
+        }))
+      );
 
-        setQuizzesList(
-          rows.map((row) => ({
-            id: row.quiz_id,
-            title: row.quiz_title,
-            topic: row.topic || row.quiz_title,
-            difficulty: (row.difficulty || 'Medium') as Quiz['difficulty'],
-            questions: [],
-            totalQuestions: row.total_questions,
-            isFromHistory: true,
-          }))
-        );
-
-        setRecentHistory(
-          rows.slice(0, 6).map((row) => ({
-            id: row.quiz_id,
-            title: row.quiz_title,
-            topic: row.topic || row.quiz_title,
-            score: row.score_percentage,
-            date: new Date(row.completed_at).toLocaleDateString(),
-            icon: 'quiz',
-            difficulty: row.difficulty || 'Medium',
-          }))
-        );
+      setRecentHistory(
+        rows.slice(0, 10).map((row) => ({
+          id: row.quiz_id,
+          title: row.quiz_title,
+          topic: row.topic || row.quiz_title,
+          score: row.score_percentage,
+          date: new Date(row.completed_at).toLocaleDateString(),
+          icon: 'quiz',
+          difficulty: row.difficulty || 'Medium',
+        }))
+      );
 
         if (data.weak_topics) {
           setWeakTopics(data.weak_topics);
@@ -277,9 +283,9 @@ export default function App() {
             return next;
           });
         }
-      }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Could not hydrate persistent learner data:', err);
+      setLearnerDataError(err?.message || 'Failed to load quiz history from database.');
     }
   };
 
@@ -562,33 +568,64 @@ export default function App() {
   // QUIZ COMPLETE
   // ==========================================================
 
-  const handleQuizComplete = (result: QuizResult, completedQuiz?: Quiz) => {
+  const handleQuizComplete = async (result: QuizResult, completedQuiz?: Quiz): Promise<void> => {
     if (completedQuiz) {
       setActiveQuiz(completedQuiz);
     }
 
     setResultsInitialTab('review');
 
-    (async () => {
+    // Make final submission idempotent using a stable attempt ID
+    const attemptId = result.attemptId || (result as any).attempt_id || `attempt_${result.quizId}_${Date.now()}`;
+
+    const payload = {
+      attempt_id: attemptId,
+      quiz_id: result.quizId,
+      quiz_title: result.quizTitle,
+      topic: completedQuiz?.topic || activeQuiz?.topic || '',
+      difficulty: completedQuiz?.difficulty || activeQuiz?.difficulty || 'Medium',
+      score_percentage: result.scorePercentage,
+      total_questions: result.totalQuestions,
+      correct_answers_count: result.correctAnswersCount,
+      session_id: adaptiveSessionId || null,
+      topic_breakdown: result.topicBreakdown?.length ? result.topicBreakdown : null,
+      question_outcomes: (result as any).questionOutcomes || null,
+      user_answers: result.userAnswers || null,
+    };
+
+    if (isGuest) {
       try {
-        await apiFetch('/api/record-quiz-result', {
-          method: 'POST',
-          body: JSON.stringify({
-            quiz_id: result.quizId,
-            quiz_title: result.quizTitle,
-            topic: completedQuiz?.topic || activeQuiz?.topic || '',
-            difficulty: completedQuiz?.difficulty || activeQuiz?.difficulty || 'Medium',
-            score_percentage: result.scorePercentage,
-            total_questions: result.totalQuestions,
-            correct_answers_count: result.correctAnswersCount,
-            session_id: adaptiveSessionId || null,
-            topic_breakdown: result.topicBreakdown?.length ? result.topicBreakdown : null,
-          }),
+        const guestSaved = localStorage.getItem('flexdemy_guest_quiz_history');
+        const list = guestSaved ? JSON.parse(guestSaved) : [];
+        list.unshift({
+          id: attemptId,
+          ...payload,
+          completed_at: new Date().toISOString(),
         });
+        localStorage.setItem('flexdemy_guest_quiz_history', JSON.stringify(list.slice(0, 50)));
       } catch (err) {
-        console.error('Quiz result save error:', err);
+        console.warn('Could not save guest quiz history:', err);
       }
-    })();
+    } else {
+      const response = await apiFetch('/api/record-quiz-result', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        let errorMsg = 'Failed to save quiz results to database.';
+        try {
+          const errData = await response.json();
+          if (errData.detail) errorMsg = errData.detail;
+        } catch {}
+        throw new Error(errorMsg);
+      }
+
+      const resData = await response.json();
+      if (resData.recorded === false) {
+        throw new Error('Database write could not be confirmed.');
+      }
+    }
 
     setQuizResult(result);
     try {
@@ -599,59 +636,80 @@ export default function App() {
     } catch {
       // ignore
     }
-    setRecentHistory((prev) => [
-      {
-        id: result.quizId,
-        title: result.quizTitle,
-        topic: completedQuiz?.topic || activeQuiz?.topic || result.quizTitle,
-        score: result.scorePercentage,
-        date: 'Just now',
-        icon: 'quiz',
-        difficulty: completedQuiz?.difficulty || activeQuiz?.difficulty || 'Medium',
-      },
-      ...prev,
-    ].slice(0, 6));
 
-    setQuizResults((prevResults) => {
-      const updatedResults = [...prevResults, result];
-      const totalQuizzes = updatedResults.length;
-      const averageScore = Math.round(
-        updatedResults.reduce((sum, quiz) => sum + quiz.scorePercentage, 0) / totalQuizzes
-      );
-      const bestScore = Math.max(...updatedResults.map((quiz) => quiz.scorePercentage));
-      const totalQuestions = updatedResults.reduce((sum, quiz) => sum + quiz.totalQuestions, 0);
-      const totalCorrect = updatedResults.reduce((sum, quiz) => sum + quiz.correctAnswersCount, 0);
-      const accuracy = totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
+    if (!isGuest) {
+      await hydrateLearnerData();
+    } else {
+      setRecentHistory((prev) => [
+        {
+          id: result.quizId,
+          title: result.quizTitle,
+          topic: completedQuiz?.topic || activeQuiz?.topic || result.quizTitle,
+          score: result.scorePercentage,
+          date: 'Just now',
+          icon: 'quiz',
+          difficulty: completedQuiz?.difficulty || activeQuiz?.difficulty || 'Medium',
+        },
+        ...prev,
+      ].slice(0, 6));
 
-      setUserProfile((profile) => ({
-        ...profile,
-        totalQuizzesAttempted: profile.totalQuizzesAttempted + 1,
-        averageScore,
-        bestScore: Math.max(profile.bestScore, bestScore),
-        accuracy,
-        overallProgress: averageScore,
-      }));
+      setQuizResults((prevResults) => {
+        const updatedResults = [...prevResults, result];
+        const totalQuizzes = updatedResults.length;
+        const averageScore = Math.round(
+          updatedResults.reduce((sum, quiz) => sum + quiz.scorePercentage, 0) / totalQuizzes
+        );
+        const bestScore = Math.max(...updatedResults.map((quiz) => quiz.scorePercentage));
+        const totalQuestions = updatedResults.reduce((sum, quiz) => sum + quiz.totalQuestions, 0);
+        const totalCorrect = updatedResults.reduce((sum, quiz) => sum + quiz.correctAnswersCount, 0);
+        const accuracy = totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
 
-      return updatedResults;
-    });
+        setUserProfile((profile) => ({
+          ...profile,
+          totalQuizzesAttempted: profile.totalQuizzesAttempted + 1,
+          averageScore,
+          bestScore: Math.max(profile.bestScore, bestScore),
+          accuracy,
+          overallProgress: averageScore,
+        }));
+
+        return updatedResults;
+      });
+    }
 
     setCurrentView('quiz-results');
   };
 
   const handleOpenQuizResult = async (quizId?: string) => {
     try {
-      const response = await apiFetch('/api/quiz-history');
-      if (!response.ok) return;
+      let rows: any[] = [];
+      if (!isGuest) {
+        const response = await apiFetch('/api/quiz-history');
+        if (response.ok) {
+          const data = await response.json();
+          rows = data.history || [];
+        }
+      }
 
-      const data = await response.json();
-      const rows: any[] = data.history || [];
+      if (rows.length === 0) {
+        try {
+          const guestSaved = localStorage.getItem('flexdemy_guest_quiz_history');
+          if (guestSaved) {
+            rows = JSON.parse(guestSaved);
+          }
+        } catch {}
+      }
+
       if (rows.length === 0) return;
 
-      const match = quizId ? rows.find((r) => r.quiz_id === quizId) : rows[0];
+      const match = quizId
+        ? rows.find((r) => r.quiz_id === quizId || r.attempt_id === quizId || r.id === quizId)
+        : rows[0];
       if (!match) return;
 
       const reconstructed: QuizResult = {
         quizId: match.quiz_id,
+        attemptId: match.attempt_id || match.id,
         quizTitle: match.quiz_title,
         scorePercentage: match.score_percentage,
         totalQuestions: match.total_questions,
@@ -659,9 +717,31 @@ export default function App() {
         incorrectAnswersCount: match.total_questions - match.correct_answers_count,
         timeSpentSeconds: 0,
         dateCompleted: match.completed_at,
-        userAnswers: {},
+        userAnswers: match.user_answers || {},
         topicBreakdown: match.topic_breakdown || [],
+        questionOutcomes: match.question_outcomes || undefined,
       };
+
+      if (match.question_outcomes && Array.isArray(match.question_outcomes) && match.question_outcomes.length > 0) {
+        const reconstructedQuiz: Quiz = {
+          id: match.quiz_id,
+          title: match.quiz_title,
+          topic: match.topic || match.quiz_title,
+          difficulty: (match.difficulty || 'Medium') as Quiz['difficulty'],
+          totalQuestions: match.total_questions,
+          questions: match.question_outcomes.map((qo: any, idx: number) => ({
+            id: qo.question_id || idx + 1,
+            question: qo.question_text || '',
+            options: qo.options || [],
+            correctAnswerIndex: qo.correct_answer_index ?? 0,
+            hint: qo.hint || '',
+            explanation: qo.explanation || '',
+            concept: qo.concept || match.topic || '',
+            sourceLocator: qo.source_locator || '',
+          })),
+        };
+        setActiveQuiz(reconstructedQuiz);
+      }
 
       setQuizResult(reconstructed);
       try {
@@ -793,6 +873,8 @@ export default function App() {
               weakTopics={weakTopics}
               onOpenUploadModal={() => setIsUploadModalOpen(true)}
               onOpenCourseMap={() => setIsCourseMapOpen(true)}
+              learnerDataError={learnerDataError}
+              onRetryHydrate={hydrateLearnerData}
             />
           )}
 
@@ -808,6 +890,8 @@ export default function App() {
                 setActiveSavedPath(path);
                 setIsCourseMapOpen(true);
               }}
+              recentHistory={recentHistory}
+              onOpenQuizResult={handleOpenQuizResult}
             />
           )}
 

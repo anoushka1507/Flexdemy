@@ -9,7 +9,7 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx --test tests/speech_controller.test.ts tests/theme_and_profile.test.ts tests/frontend_regression.test.ts tests/quiz_navigation_and_auth_theme.test.ts",
+    "test": "tsx --test tests/speech_controller.test.ts tests/theme_and_profile.test.ts tests/frontend_regression.test.ts tests/quiz_navigation_and_auth_theme.test.ts tests/quiz_persistence_unified.test.ts",
     "test:speech": "tsx --test tests/speech_controller.test.ts",
     "test:theme": "tsx --test tests/theme_and_profile.test.ts",
     "test:regression": "tsx --test tests/frontend_regression.test.ts"
