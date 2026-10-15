@@ -165,10 +165,10 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
       <div className="bg-white p-8 rounded-3xl border border-purple-100 shadow-xs space-y-4">
         {isNewStudent ? (
           <div className="space-y-3">
-            <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-purple-100 text-[#7372A5] uppercase tracking-wider">
-              Find Your Starting Level
-            </span>
-            <h4 className="font-extrabold text-sm text-[#222138]">
+            <p className="text-xs font-bold text-[var(--brand-primary)]">
+              Find your starting level
+            </p>
+            <h4 className="font-extrabold text-sm text-[var(--text-primary)]">
               Personalise Your Learning Journey
             </h4>
             <p className="text-xs text-gray-500 leading-relaxed">
@@ -223,12 +223,19 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
           {topics.map(([topic, info]) => {
             const percent = Math.round(info.mastery_score * 100);
 
-            const badge =
+            const statusLabel =
               percent < 40
-                ? { label: 'Needs Practice', color: 'bg-rose-100 text-rose-700 border-rose-200' }
+                ? 'Needs practice'
                 : percent < 75
-                ? { label: 'Making Progress', color: 'bg-amber-100 text-amber-700 border-amber-200' }
-                : { label: 'Mastered', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
+                ? 'Making progress'
+                : 'Mastered';
+
+            const statusTextColor =
+              percent < 40
+                ? 'text-[var(--error-text)]'
+                : percent < 75
+                ? 'text-[var(--warning-text)]'
+                : 'text-[var(--success-text)]';
 
             const barColor =
               percent < 40
@@ -241,9 +248,9 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
               <div key={topic} className="space-y-2 p-4 rounded-2xl bg-[#f8f8fc] border border-[#e8e8f2]">
                 <div className="flex items-center justify-between text-xs flex-wrap gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-[#222138]">{topic}</span>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${badge.color}`}>
-                      {badge.label}
+                    <span className="font-bold text-[var(--text-primary)]">{topic}</span>
+                    <span className={`text-[11px] font-semibold ${statusTextColor}`}>
+                      · {statusLabel}
                     </span>
                   </div>
 

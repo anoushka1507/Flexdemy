@@ -84,9 +84,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <h1 className="text-xl sm:text-2xl font-extrabold text-[#222138] dark:text-[#f2f1f8] tracking-tight">
               Welcome back, {studentName}!
             </h1>
-            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-[#ececf4] dark:bg-[#252436] text-[#7372A5] dark:text-[#a1a0d3] border border-[#d8d7e8] dark:border-[#312f45]">
-              {userProfile.role || 'Student'}
-            </span>
           </div>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
             {hasHistory

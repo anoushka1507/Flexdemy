@@ -196,4 +196,24 @@ export interface UserSettings {
   dailyStudyMinutes: number;
   examDate?: string;
   weakTopicInterval: 'daily' | 'before_quiz' | 'weekly';
+
+  // Dyslexia Mode reading preferences — independent of the general
+  // theme/fontSize settings above, and only applied while Dyslexia
+  // Mode is on.
+  dyslexiaFont: 'standard' | 'lexend';
+  dyslexiaTextSize: number; // px, 15-24
+  dyslexiaLineSpacing: number; // unitless line-height, 1.3-2.2
+  dyslexiaLetterSpacing: number; // em, 0-0.08
+  dyslexiaBackground: 'warm' | 'soft-white' | 'mint';
 }
+
+export const DYSLEXIA_DEFAULTS: Pick<
+  UserSettings,
+  'dyslexiaFont' | 'dyslexiaTextSize' | 'dyslexiaLineSpacing' | 'dyslexiaLetterSpacing' | 'dyslexiaBackground'
+> = {
+  dyslexiaFont: 'standard',
+  dyslexiaTextSize: 18,
+  dyslexiaLineSpacing: 1.65,
+  dyslexiaLetterSpacing: 0.02,
+  dyslexiaBackground: 'warm',
+};

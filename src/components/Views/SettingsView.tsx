@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { UserProfile, UserSettings, ThemeMode } from '../../types';
+import { UserProfile, UserSettings, ThemeMode, DYSLEXIA_DEFAULTS } from '../../types';
 import { supabase } from '../../supabaseClient';
 import { apiFetch } from '../../utils/api';
 
@@ -31,6 +31,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [speechPitch, setSpeechPitch] = useState<number>(settings.speechPitch || 1.0);
   const [reducedMotion, setReducedMotion] = useState<boolean>(settings.reducedMotion || false);
   const [fontSize, setFontSize] = useState<'standard' | 'large'>(settings.fontSize || 'standard');
+  const [dyslexiaFont, setDyslexiaFont] = useState<'standard' | 'lexend'>(
+    settings.dyslexiaFont || DYSLEXIA_DEFAULTS.dyslexiaFont
+  );
+  const [dyslexiaTextSize, setDyslexiaTextSize] = useState<number>(
+    settings.dyslexiaTextSize ?? DYSLEXIA_DEFAULTS.dyslexiaTextSize
+  );
+  const [dyslexiaLineSpacing, setDyslexiaLineSpacing] = useState<number>(
+    settings.dyslexiaLineSpacing ?? DYSLEXIA_DEFAULTS.dyslexiaLineSpacing
+  );
+  const [dyslexiaLetterSpacing, setDyslexiaLetterSpacing] = useState<number>(
+    settings.dyslexiaLetterSpacing ?? DYSLEXIA_DEFAULTS.dyslexiaLetterSpacing
+  );
+  const [dyslexiaBackground, setDyslexiaBackground] = useState<'warm' | 'soft-white' | 'mint'>(
+    settings.dyslexiaBackground || DYSLEXIA_DEFAULTS.dyslexiaBackground
+  );
 
   // Learning preferences local states
   const [explanationLanguage, setExplanationLanguage] = useState<'english' | 'hindi'>(
@@ -90,6 +105,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleResetDyslexiaDefaults = () => {
+    setDyslexiaFont(DYSLEXIA_DEFAULTS.dyslexiaFont);
+    setDyslexiaTextSize(DYSLEXIA_DEFAULTS.dyslexiaTextSize);
+    setDyslexiaLineSpacing(DYSLEXIA_DEFAULTS.dyslexiaLineSpacing);
+    setDyslexiaLetterSpacing(DYSLEXIA_DEFAULTS.dyslexiaLetterSpacing);
+    setDyslexiaBackground(DYSLEXIA_DEFAULTS.dyslexiaBackground);
+    handleApplySetting({ ...DYSLEXIA_DEFAULTS });
   };
 
   // Password change handler
@@ -349,6 +373,142 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 />
               </button>
             </div>
+
+            {/* Adjustable Dyslexia Mode reading preferences — only shown
+                once the mode is on, since they only affect it. Not every
+                dyslexic reader wants the same font/spacing/background,
+                so each is independently adjustable. */}
+            {dyslexiaMode && (
+              <div className="p-4 rounded-2xl bg-[#fcf8ff] dark:bg-[#1a1926] border border-[#d8d7e8] dark:border-[#312f45] space-y-5">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-[#222138] dark:text-[#f2f1f8]">
+                    Reading Preferences
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleResetDyslexiaDefaults}
+                    className="text-[11px] font-bold text-[#7372A5] dark:text-[#a1a0d3] hover:underline"
+                  >
+                    Reset to defaults
+                  </button>
+                </div>
+
+                {/* Font */}
+                <div>
+                  <label className="text-[11px] font-bold text-gray-600 dark:text-gray-400 block mb-1.5">
+                    Font
+                  </label>
+                  <div className="flex gap-2">
+                    {([
+                      { id: 'standard', label: 'Standard (Atkinson Hyperlegible)' },
+                      { id: 'lexend', label: 'Lexend' },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setDyslexiaFont(opt.id);
+                          handleApplySetting({ dyslexiaFont: opt.id });
+                        }}
+                        className={`px-3 py-2 rounded-xl text-[11px] font-bold border transition-all ${
+                          dyslexiaFont === opt.id
+                            ? 'bg-[#7372A5] text-white border-[#7372A5]'
+                            : 'bg-white dark:bg-[#1e1d2c] text-[#222138] dark:text-[#f2f1f8] border-[#d8d7e8] dark:border-[#312f45]'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Text size */}
+                <div>
+                  <label className="text-[11px] font-bold text-gray-600 dark:text-gray-400 block mb-1.5">
+                    Text size — {dyslexiaTextSize}px
+                  </label>
+                  <input
+                    type="range"
+                    min={15}
+                    max={24}
+                    step={1}
+                    value={dyslexiaTextSize}
+                    onChange={(e) => setDyslexiaTextSize(Number(e.target.value))}
+                    onMouseUp={() => handleApplySetting({ dyslexiaTextSize })}
+                    onTouchEnd={() => handleApplySetting({ dyslexiaTextSize })}
+                    className="w-full accent-[#7372A5]"
+                  />
+                </div>
+
+                {/* Line spacing */}
+                <div>
+                  <label className="text-[11px] font-bold text-gray-600 dark:text-gray-400 block mb-1.5">
+                    Line spacing — {dyslexiaLineSpacing.toFixed(2)}
+                  </label>
+                  <input
+                    type="range"
+                    min={1.3}
+                    max={2.2}
+                    step={0.05}
+                    value={dyslexiaLineSpacing}
+                    onChange={(e) => setDyslexiaLineSpacing(Number(e.target.value))}
+                    onMouseUp={() => handleApplySetting({ dyslexiaLineSpacing })}
+                    onTouchEnd={() => handleApplySetting({ dyslexiaLineSpacing })}
+                    className="w-full accent-[#7372A5]"
+                  />
+                </div>
+
+                {/* Letter spacing */}
+                <div>
+                  <label className="text-[11px] font-bold text-gray-600 dark:text-gray-400 block mb-1.5">
+                    Letter spacing — {dyslexiaLetterSpacing.toFixed(3)}em
+                  </label>
+                  <input
+                    type="range"
+                    min={0}
+                    max={0.08}
+                    step={0.005}
+                    value={dyslexiaLetterSpacing}
+                    onChange={(e) => setDyslexiaLetterSpacing(Number(e.target.value))}
+                    onMouseUp={() => handleApplySetting({ dyslexiaLetterSpacing })}
+                    onTouchEnd={() => handleApplySetting({ dyslexiaLetterSpacing })}
+                    className="w-full accent-[#7372A5]"
+                  />
+                </div>
+
+                {/* Background theme */}
+                <div>
+                  <label className="text-[11px] font-bold text-gray-600 dark:text-gray-400 block mb-1.5">
+                    Background
+                  </label>
+                  <div className="flex gap-2">
+                    {([
+                      { id: 'warm', label: 'Warm off-white', swatch: '#faf6ef' },
+                      { id: 'soft-white', label: 'Soft white', swatch: '#f7f7f5' },
+                      { id: 'mint', label: 'Pale mint', swatch: '#eef5f0' },
+                    ] as const).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => {
+                          setDyslexiaBackground(opt.id);
+                          handleApplySetting({ dyslexiaBackground: opt.id });
+                        }}
+                        title={opt.label}
+                        className={`flex items-center gap-2 px-3 py-2 rounded-xl text-[11px] font-bold border transition-all ${
+                          dyslexiaBackground === opt.id
+                            ? 'border-[#7372A5] ring-2 ring-[#7372A5]/30'
+                            : 'border-[#d8d7e8] dark:border-[#312f45]'
+                        }`}
+                        style={{ backgroundColor: opt.swatch, color: '#2b2420' }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Reduced Motion Switch */}
             <div className="flex items-center justify-between p-4 rounded-2xl bg-[#fcf8ff] dark:bg-[#1a1926] border border-[#d8d7e8] dark:border-[#312f45]">

@@ -157,3 +157,52 @@ export function subscribeToSystemTheme(
 
   return () => {};
 }
+
+// ============================================================
+// DYSLEXIA MODE READING PREFERENCES
+// ============================================================
+
+export type DyslexiaFont = 'standard' | 'lexend';
+export type DyslexiaBackground = 'warm' | 'soft-white' | 'mint';
+
+export interface DyslexiaPrefs {
+  dyslexiaFont: DyslexiaFont;
+  dyslexiaTextSize: number;
+  dyslexiaLineSpacing: number;
+  dyslexiaLetterSpacing: number;
+  dyslexiaBackground: DyslexiaBackground;
+}
+
+const DYSLEXIA_FONT_STACKS: Record<DyslexiaFont, string> = {
+  standard: "'Atkinson Hyperlegible Next', 'Inter', sans-serif",
+  lexend: "'Lexend', 'Inter', sans-serif",
+};
+
+const DYSLEXIA_BACKGROUNDS: Record<
+  DyslexiaBackground,
+  { bg: string; text: string; surface: string; border: string }
+> = {
+  warm: { bg: '#faf6ef', text: '#2b2420', surface: '#ffffff', border: '#e3dcc9' },
+  'soft-white': { bg: '#f7f7f5', text: '#222222', surface: '#ffffff', border: '#dedede' },
+  mint: { bg: '#eef5f0', text: '#1f2a24', surface: '#ffffff', border: '#cfe3d7' },
+};
+
+// Values are applied as inline CSS custom properties on <body> so every
+// page, dialog, and nested component picks them up through the same
+// --dys-* tokens index.css already uses — no per-component wiring needed,
+// and nothing here touches Dark Mode's own tokens.
+export function applyDyslexiaPrefs(prefs: DyslexiaPrefs): void {
+  if (typeof document === 'undefined') return;
+
+  const body = document.body;
+  const bgSet = DYSLEXIA_BACKGROUNDS[prefs.dyslexiaBackground] || DYSLEXIA_BACKGROUNDS.warm;
+
+  body.style.setProperty('--dys-font', DYSLEXIA_FONT_STACKS[prefs.dyslexiaFont] || DYSLEXIA_FONT_STACKS.standard);
+  body.style.setProperty('--dys-font-size', `${prefs.dyslexiaTextSize}px`);
+  body.style.setProperty('--dys-line-height', `${prefs.dyslexiaLineSpacing}`);
+  body.style.setProperty('--dys-letter-spacing', `${prefs.dyslexiaLetterSpacing}em`);
+  body.style.setProperty('--dys-bg', bgSet.bg);
+  body.style.setProperty('--dys-text', bgSet.text);
+  body.style.setProperty('--dys-surface', bgSet.surface);
+  body.style.setProperty('--dys-border', bgSet.border);
+}

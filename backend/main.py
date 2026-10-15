@@ -3127,6 +3127,11 @@ class UserPreferencesPayload(BaseModel):
     reduced_motion: bool | None = None
     font_size: str | None = None
     weak_topic_interval: str | None = None
+    dyslexia_font: str | None = None
+    dyslexia_text_size: int | None = None
+    dyslexia_line_spacing: float | None = None
+    dyslexia_letter_spacing: float | None = None
+    dyslexia_background: str | None = None
 
 
 class UserProfilePayload(BaseModel):

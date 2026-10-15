@@ -8,11 +8,12 @@ import {
   UserProfile,
   UserSettings,
   ThemeMode,
+  DYSLEXIA_DEFAULTS,
 } from './types';
 
 import { supabase } from './supabaseClient';
 import { apiFetch } from './utils/api';
-import { getStoredTheme, applyTheme, subscribeToSystemTheme, syncThemeWithDyslexia, applyAuthThemeBoundary, restoreDashboardTheme } from './utils/theme';
+import { getStoredTheme, applyTheme, subscribeToSystemTheme, syncThemeWithDyslexia, applyAuthThemeBoundary, restoreDashboardTheme, applyDyslexiaPrefs } from './utils/theme';
 
 import {
   INITIAL_USER_PROFILE,
@@ -54,6 +55,7 @@ export default function App() {
     explanationStyle: 'concise',
     dailyStudyMinutes: 45,
     weakTopicInterval: 'daily',
+    ...DYSLEXIA_DEFAULTS,
   });
 
   // Toasts
@@ -251,20 +253,29 @@ export default function App() {
             document.documentElement.classList.remove('font-large');
           }
 
-          setUserSettings((prev) => ({
-            ...prev,
-            theme: (p.theme as ThemeMode) || prev.theme,
-            dyslexiaMode: p.dyslexia_mode ?? prev.dyslexiaMode,
-            speechRate: p.speech_rate ?? prev.speechRate,
-            speechPitch: p.speech_pitch ?? prev.speechPitch,
-            reducedMotion: p.reduced_motion ?? prev.reducedMotion,
-            fontSize: (p.font_size as any) ?? prev.fontSize,
-            explanationLanguage: (p.language as any) ?? prev.explanationLanguage,
-            explanationStyle: (p.explanation_style as any) ?? prev.explanationStyle,
-            dailyStudyMinutes: p.daily_minutes ?? prev.dailyStudyMinutes,
-            examDate: p.exam_date ?? prev.examDate,
-            weakTopicInterval: (p.weak_topic_interval as any) ?? prev.weakTopicInterval,
-          }));
+          setUserSettings((prev) => {
+            const next: UserSettings = {
+              ...prev,
+              theme: (p.theme as ThemeMode) || prev.theme,
+              dyslexiaMode: p.dyslexia_mode ?? prev.dyslexiaMode,
+              speechRate: p.speech_rate ?? prev.speechRate,
+              speechPitch: p.speech_pitch ?? prev.speechPitch,
+              reducedMotion: p.reduced_motion ?? prev.reducedMotion,
+              fontSize: (p.font_size as any) ?? prev.fontSize,
+              explanationLanguage: (p.language as any) ?? prev.explanationLanguage,
+              explanationStyle: (p.explanation_style as any) ?? prev.explanationStyle,
+              dailyStudyMinutes: p.daily_minutes ?? prev.dailyStudyMinutes,
+              examDate: p.exam_date ?? prev.examDate,
+              weakTopicInterval: (p.weak_topic_interval as any) ?? prev.weakTopicInterval,
+              dyslexiaFont: (p.dyslexia_font as any) ?? prev.dyslexiaFont,
+              dyslexiaTextSize: p.dyslexia_text_size ?? prev.dyslexiaTextSize,
+              dyslexiaLineSpacing: p.dyslexia_line_spacing ?? prev.dyslexiaLineSpacing,
+              dyslexiaLetterSpacing: p.dyslexia_letter_spacing ?? prev.dyslexiaLetterSpacing,
+              dyslexiaBackground: (p.dyslexia_background as any) ?? prev.dyslexiaBackground,
+            };
+            applyDyslexiaPrefs(next);
+            return next;
+          });
         }
       }
     } catch (err) {
@@ -402,10 +413,21 @@ export default function App() {
         }
       }
 
-      setUserSettings((prev) => ({
-        ...prev,
-        ...updated,
-      }));
+      let mergedSettings: UserSettings = userSettings;
+      setUserSettings((prev) => {
+        mergedSettings = { ...prev, ...updated };
+        return mergedSettings;
+      });
+
+      if (
+        updated.dyslexiaFont !== undefined ||
+        updated.dyslexiaTextSize !== undefined ||
+        updated.dyslexiaLineSpacing !== undefined ||
+        updated.dyslexiaLetterSpacing !== undefined ||
+        updated.dyslexiaBackground !== undefined
+      ) {
+        applyDyslexiaPrefs(mergedSettings);
+      }
 
       const { data } = await supabase.auth.getSession();
       if (data.session) {
@@ -423,6 +445,11 @@ export default function App() {
             daily_minutes: updated.dailyStudyMinutes,
             exam_date: updated.examDate,
             weak_topic_interval: updated.weakTopicInterval,
+            dyslexia_font: updated.dyslexiaFont,
+            dyslexia_text_size: updated.dyslexiaTextSize,
+            dyslexia_line_spacing: updated.dyslexiaLineSpacing,
+            dyslexia_letter_spacing: updated.dyslexiaLetterSpacing,
+            dyslexia_background: updated.dyslexiaBackground,
           }),
         });
         return resp.ok;

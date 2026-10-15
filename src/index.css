@@ -18,6 +18,40 @@
   --brand-contrast: #ffffff;
   --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
   --ring-focus: 0 0 0 2px rgba(115, 114, 165, 0.4);
+
+  --input-bg: #ffffff;
+  --input-border: #d8d7e8;
+  --input-placeholder: #75738f;
+  --input-disabled-bg: #f1f0f6;
+  --input-disabled-text: #a6a4bd;
+  --input-disabled-border: #e4e3ee;
+
+  --progress-track: #ececf4;
+  --progress-fill: #7372A5;
+
+  --success-bg: #ecfdf5;
+  --success-text: #047857;
+  --success-border: #a7f3d0;
+
+  --warning-bg: #fffbeb;
+  --warning-text: #b45309;
+  --warning-border: #fde68a;
+
+  --error-bg: #fef2f2;
+  --error-text: #b91c1c;
+  --error-border: #fecaca;
+
+  /* Dyslexia Mode reading preferences — defaults, overridden per-user via
+     inline styles on <body> from Settings (src/utils/dyslexiaPrefs.ts). */
+  --dys-font: 'Atkinson Hyperlegible Next', 'Inter', sans-serif;
+  --dys-font-size: 18px;
+  --dys-line-height: 1.65;
+  --dys-letter-spacing: 0.02em;
+  --dys-word-spacing: 0.06em;
+  --dys-bg: #faf6ef;
+  --dys-text: #2b2420;
+  --dys-surface: #ffffff;
+  --dys-border: #e3dcc9;
 }
 
 .dark, [data-theme="dark"] {
@@ -38,6 +72,28 @@
   --brand-contrast: #ffffff;
   --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.35), 0 1px 2px -1px rgba(0, 0, 0, 0.35);
   --ring-focus: 0 0 0 2px rgba(138, 137, 190, 0.5);
+
+  --input-bg: #1e1d2c;
+  --input-border: #3a3852;
+  --input-placeholder: #8c8ba8;
+  --input-disabled-bg: #1a1926;
+  --input-disabled-text: #5c5a76;
+  --input-disabled-border: #2a2838;
+
+  --progress-track: #242236;
+  --progress-fill: #8a89be;
+
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --success-text: #34d399;
+  --success-border: rgba(16, 185, 129, 0.35);
+
+  --warning-bg: rgba(245, 158, 11, 0.12);
+  --warning-text: #fbbf24;
+  --warning-border: rgba(245, 158, 11, 0.35);
+
+  --error-bg: rgba(239, 68, 68, 0.12);
+  --error-text: #f87171;
+  --error-border: rgba(239, 68, 68, 0.35);
 }
 
 @layer base {
@@ -48,20 +104,31 @@
     color: var(--text-primary);
   }
 
-  /* Dyslexia Mode: Clean Readable Typography, Dedicated High-Contrast Light Theme */
+  /* Dyslexia Mode: Clean Readable Typography, Dedicated High-Contrast Light Theme.
+     Values come from the --dys-* tokens, which default here and are
+     overridden inline per-user from Settings — never from Dark Mode. */
   body.dyslexia-mode, .dyslexia-mode {
-    font-family: 'OpenDyslexic', 'Comic Sans MS', 'Comic Neue', sans-serif !important;
-    letter-spacing: 0.025em !important;
-    word-spacing: 0.08em !important;
-    line-height: 1.65 !important;
-    background-color: #f6f6fa !important;
-    color: #1a192b !important;
+    font-family: var(--dys-font) !important;
+    font-size: var(--dys-font-size) !important;
+    letter-spacing: var(--dys-letter-spacing) !important;
+    word-spacing: var(--dys-word-spacing) !important;
+    line-height: var(--dys-line-height) !important;
+    background-color: var(--dys-bg) !important;
+    color: var(--dys-text) !important;
   }
 
   body.dyslexia-mode *:not(.material-symbols-outlined) {
-    font-family: 'OpenDyslexic', 'Comic Sans MS', 'Comic Neue', sans-serif !important;
-    letter-spacing: 0.025em !important;
-    word-spacing: 0.08em !important;
+    font-family: var(--dys-font) !important;
+    letter-spacing: var(--dys-letter-spacing) !important;
+    word-spacing: var(--dys-word-spacing) !important;
+  }
+
+  /* Reading-heavy content (paragraphs, question text) gets a tighter max
+     width so lines stay short and easy to track, per the spec. */
+  body.dyslexia-mode p,
+  body.dyslexia-mode .dyslexia-readable {
+    max-width: 68ch;
+    text-align: left !important;
   }
 
   /* Exclude Material Symbols icons from word/letter spacing and font changes */
@@ -81,11 +148,23 @@
     white-space: nowrap;
   }
 
-  /* Dyslexia Mode Card Surfaces & High-Contrast Typography */
-  body.dyslexia-mode .bg-white {
-    background-color: #ffffff !important;
-    color: #1a192b !important;
-    border-color: #d8d7e8 !important;
+  /* Dyslexia Mode Card Surfaces & High-Contrast Typography — also catches
+     the nested-card and dark-mode hex classes an app-wide sweep found, so
+     a card never stays dark-themed while Dyslexia Mode forces light text. */
+  body.dyslexia-mode .bg-white,
+  body.dyslexia-mode .bg-\[\#f8f8fc\],
+  body.dyslexia-mode .bg-\[\#161522\],
+  body.dyslexia-mode .bg-\[\#1e1d2c\],
+  body.dyslexia-mode .bg-gray-50 {
+    background-color: var(--dys-surface) !important;
+    color: var(--dys-text) !important;
+    border-color: var(--dys-border) !important;
+  }
+
+  body.dyslexia-mode .border-\[\#d8d7e8\],
+  body.dyslexia-mode .border-\[\#e8e8f2\],
+  body.dyslexia-mode .border-\[\#312f45\] {
+    border-color: var(--dys-border) !important;
   }
 
   /* Dyslexia Word-Level TTS Highlighting */
@@ -173,9 +252,99 @@ body.dyslexia-mode select option {
 .dark:not(.dyslexia-mode) .text-gray-400 {
   color: var(--text-muted) !important;
 }
+.dark:not(.dyslexia-mode) .text-gray-300 {
+  color: var(--text-muted) !important;
+}
+.dark:not(.dyslexia-mode) .text-gray-800 {
+  color: var(--text-primary) !important;
+}
 .dark:not(.dyslexia-mode) .shadow-xs,
 .dark:not(.dyslexia-mode) .shadow-sm {
   box-shadow: var(--card-shadow) !important;
+}
+
+/* Nested card surfaces (light hex used for a card within a card) */
+.dark:not(.dyslexia-mode) .bg-\[\#f8f8fc\],
+.dark:not(.dyslexia-mode) .bg-gray-50 {
+  background-color: var(--bg-surface-elevated) !important;
+}
+.dark:not(.dyslexia-mode) .border-\[\#e8e8f2\] {
+  border-color: var(--border-subtle) !important;
+}
+
+/* Status pill / badge backgrounds — map each light-mode semantic shade to
+   the matching dark-mode-safe token instead of staying hardcoded light. */
+.dark:not(.dyslexia-mode) .bg-purple-50,
+.dark:not(.dyslexia-mode) .bg-purple-100 {
+  background-color: var(--brand-light) !important;
+}
+.dark:not(.dyslexia-mode) .border-purple-100,
+.dark:not(.dyslexia-mode) .border-purple-200 {
+  border-color: var(--border-default) !important;
+}
+.dark:not(.dyslexia-mode) .text-purple-700 {
+  color: var(--brand-primary) !important;
+}
+
+.dark:not(.dyslexia-mode) .bg-emerald-50,
+.dark:not(.dyslexia-mode) .bg-emerald-100 {
+  background-color: var(--success-bg) !important;
+}
+.dark:not(.dyslexia-mode) .border-emerald-200,
+.dark:not(.dyslexia-mode) .border-emerald-300 {
+  border-color: var(--success-border) !important;
+}
+.dark:not(.dyslexia-mode) .text-emerald-700 {
+  color: var(--success-text) !important;
+}
+
+.dark:not(.dyslexia-mode) .bg-amber-50,
+.dark:not(.dyslexia-mode) .bg-amber-100 {
+  background-color: var(--warning-bg) !important;
+}
+.dark:not(.dyslexia-mode) .border-amber-200 {
+  border-color: var(--warning-border) !important;
+}
+.dark:not(.dyslexia-mode) .text-amber-700 {
+  color: var(--warning-text) !important;
+}
+
+.dark:not(.dyslexia-mode) .bg-rose-50,
+.dark:not(.dyslexia-mode) .bg-rose-100 {
+  background-color: var(--error-bg) !important;
+}
+.dark:not(.dyslexia-mode) .border-rose-200 {
+  border-color: var(--error-border) !important;
+}
+.dark:not(.dyslexia-mode) .text-rose-700,
+.dark:not(.dyslexia-mode) .text-rose-600 {
+  color: var(--error-text) !important;
+}
+
+/* Inputs: force readable placeholder text in both themes instead of a
+   faint color that happens to work only against one background. */
+input::placeholder,
+textarea::placeholder {
+  color: var(--input-placeholder) !important;
+  opacity: 1;
+}
+input:disabled,
+textarea:disabled,
+select:disabled,
+button:disabled {
+  opacity: 0.6;
+}
+
+/* Visible focus ring on every interactive control, in every theme. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: var(--ring-focus);
 }
 
 /* Reduced Motion */

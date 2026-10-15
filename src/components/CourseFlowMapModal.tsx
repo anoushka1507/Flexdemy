@@ -287,29 +287,30 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
   const tier2 = rankedConcepts.filter((c) => c.level >= 2);
 
   const getStatusBadge = (status: RankedConcept['masteryStatus'], score: number | null) => {
+    const percent = score != null ? Math.round(score * 100) : null;
     switch (status) {
       case 'mastered':
         return (
-          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300">
-            Mastered • P(L)={score?.toFixed(2)}
+          <span className="text-[11px] font-semibold text-[var(--success-text)]">
+            Mastered{percent != null ? ` · ${percent}%` : ''}
           </span>
         );
       case 'in_progress':
         return (
-          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-300">
-            In Progress • P(L)={score?.toFixed(2)}
+          <span className="text-[11px] font-semibold text-[var(--warning-text)]">
+            In progress{percent != null ? ` · ${percent}%` : ''}
           </span>
         );
       case 'needs_practice':
         return (
-          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 border border-rose-300">
-            Needs Practice • P(L)={score?.toFixed(2)}
+          <span className="text-[11px] font-semibold text-[var(--error-text)]">
+            Needs practice{percent != null ? ` · ${percent}%` : ''}
           </span>
         );
       default:
         return (
-          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-300">
-            Not Assessed • No attempts yet
+          <span className="text-[11px] font-semibold text-[var(--text-muted)]">
+            Not assessed yet
           </span>
         );
     }
