@@ -221,7 +221,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Start Your First Adaptive Practice Quiz
             </h2>
             <p className="text-xs sm:text-sm text-gray-500 dark:text-gray-400 leading-relaxed">
-              Flexdemy uses Bayesian Knowledge Tracing (BKT) to dynamically assess your comprehension. Upload your course lecture notes or slides to generate customized questions, or try a sample quiz.
+              Flexdemy tracks your progress across topics as you practise. Upload your course lecture notes or slides to generate customized questions, or try a sample quiz.
             </p>
           </div>
 
@@ -334,11 +334,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       Revise Weak Topic: {weakestTopicItem.topic}
                     </h3>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
-                      Your current Bayesian mastery for this topic is{' '}
+                      Your current mastery for this topic is{' '}
                       <strong className="text-amber-600 dark:text-amber-400">
                         {Math.round(weakestTopicItem.mastery_score * 100)}%
                       </strong>
-                      . Reinforcing this topic will significantly elevate your accuracy rate.
+                      . Practising this topic will help reinforce your understanding before exams.
                     </p>
                   </>
                 ) : (

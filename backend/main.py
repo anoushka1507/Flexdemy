@@ -1239,6 +1239,325 @@ async def ingest_collection_api(
     )
 
 
+class IngestionJobRecord(BaseModel):
+    job_id: str
+    file_id: str
+    filename: str
+    format: str
+    stage: str  # "uploaded" | "extracting" | "processing_video" | "indexing" | "preparing_quiz" | "completed" | "failed"
+    progress_percent: int
+    collection_id: str
+    doc_id: str | None = None
+    chunk_count: int = 0
+    locator_summary: str | None = None
+    error: str | None = None
+    warnings: list[str] = []
+    created_at: str = ""
+
+
+ingestion_jobs: dict[str, IngestionJobRecord] = {}
+
+
+async def run_ingestion_job(
+    job_id: str,
+    full_bytes: bytes,
+    clean_filename: str,
+    ext: str,
+    content_hash: str,
+    cid: str,
+    collection_name: str | None,
+    user_id: str | None,
+    sb_client: Any,
+):
+    job = ingestion_jobs.get(job_id)
+    if not job:
+        return
+
+    try:
+        if ext in VIDEO_EXTENSIONS:
+            detected_format = "video"
+        elif ext == ".pptx":
+            detected_format = "pptx"
+        elif ext in (".txt", ".md", ".markdown"):
+            detected_format = "text"
+        else:
+            detected_format = "pdf"
+
+        job.format = detected_format
+        job.stage = "extracting"
+        job.progress_percent = 35
+
+        # Format-specific extraction
+        if detected_format == "video":
+            job.stage = "processing_video"
+            job.progress_percent = 55
+            from AI_Layer.ai_core import extract_video
+            mime_type = VIDEO_MIME_BY_EXT.get(ext, "video/mp4")
+            chunks = await extract_video(full_bytes, mime_type=mime_type, source_filename=clean_filename)
+        elif detected_format == "pptx":
+            from AI_Layer.ai_core import extract_slide_deck
+            chunks = await extract_slide_deck(full_bytes, clean_filename)
+        elif detected_format == "text":
+            from AI_Layer.ai_core import extract_text_and_chunk
+            try:
+                text_content = full_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                text_content = full_bytes.decode("latin-1", errors="replace")
+            chunks = extract_text_and_chunk(text_content, clean_filename)
+        else:
+            from AI_Layer.ai_core import extract_and_chunk
+            chunks = await extract_and_chunk(full_bytes, clean_filename)
+
+        if not chunks:
+            job.stage = "failed"
+            job.progress_percent = 0
+            job.error = "No readable text, slides, or transcript could be extracted."
+            return
+
+        job.stage = "indexing"
+        job.progress_percent = 85
+
+        name_clean = re.sub(r"[^a-zA-Z0-9_.-]", "_", clean_filename)[:24]
+        doc_id = f"doc_{content_hash[:8]}_{name_clean}"
+
+        for idx, c in enumerate(chunks):
+            c.collection_id = cid
+            c.doc_id = doc_id
+            c.source_filename = clean_filename
+            c.content_hash = content_hash
+            c.chunk_index = idx
+
+        # Cache in memory
+        material_chunks_cache[content_hash] = (detected_format, chunks)
+
+        # Retrieve or create collection
+        col = material_collections.get(cid)
+        if col is None:
+            raw_col = await load_material_collection(cid, user_id=user_id, auth_client=sb_client)
+            if raw_col:
+                try:
+                    col = MaterialCollection.model_validate(raw_col)
+                except Exception:
+                    pass
+        if col is None:
+            col = MaterialCollection(collection_id=cid, name=collection_name or clean_filename, user_id=user_id)
+            material_collections[cid] = col
+
+        # Append document metadata
+        loc_summary = f"{len(chunks)} chunks"
+        col.documents.append(
+            MaterialDocument(
+                doc_id=doc_id,
+                filename=clean_filename,
+                mime_type=detected_format,
+                format=detected_format,
+                size_bytes=len(full_bytes),
+                chunk_count=len(chunks),
+                content_hash=content_hash,
+                status="completed",
+                locator_summary=loc_summary,
+            )
+        )
+        col.all_chunks.extend(chunks)
+
+        # Re-index chunks
+        for idx, c in enumerate(col.all_chunks):
+            c.chunk_index = idx
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        col.updated_at = now_iso
+        if user_id:
+            col.user_id = user_id
+
+        # Save to Supabase (best-effort)
+        try:
+            await save_material_collection(sb_client, user_id, col.model_dump(mode="json"))
+        except Exception as e:
+            logger.warning("save_material_collection error for %s: %s", cid, e)
+
+        # Job completed!
+        job.stage = "completed"
+        job.progress_percent = 100
+        job.doc_id = doc_id
+        job.chunk_count = len(chunks)
+        job.locator_summary = loc_summary
+
+    except Exception as e:
+        logger.exception("Ingestion job %s failed: %s", job_id, e)
+        job.stage = "failed"
+        job.progress_percent = 0
+        job.error = f"We couldn't finish preparing this material. ({str(e)})"
+
+
+@app.post("/upload-chunk")
+async def upload_file_chunk(
+    chunk: UploadFile = File(...),
+    file_id: str = Form(...),
+    chunk_index: int = Form(...),
+    total_chunks: int = Form(...),
+    filename: str = Form(...),
+    file_size: int = Form(...),
+    collection_id: str | None = Form(None),
+    collection_name: str | None = Form(None),
+    authorization: str | None = Header(None),
+):
+    """
+    Chunked upload endpoint to safely bypass serverless & reverse-proxy 4.5MB payload limits (HTTP 413).
+    Receives slices (< 3MB each), reassembles the complete binary on the final chunk,
+    deduplicates via SHA-256 hash, and creates an asynchronous staged background job.
+    """
+    user_id = get_user_id(authorization)
+    sb_client = get_user_client(authorization)
+
+    clean_filename = os.path.basename(filename or "uploaded_file")
+    ext = os.path.splitext(clean_filename.lower())[1]
+
+    if ext not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported format '{ext}'. Flexdemy supports PDF, modern PPTX, text/markdown notes, and lecture videos (.mp4, .mov, .webm, .mkv)."
+        )
+
+    if file_size > MAX_FILE_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="File exceeds maximum allowed size of 25MB."
+        )
+
+    import tempfile
+    chunk_dir = os.path.join(tempfile.gettempdir(), "flexdemy_chunks", file_id)
+    os.makedirs(chunk_dir, exist_ok=True)
+
+    chunk_bytes = await chunk.read()
+    chunk_path = os.path.join(chunk_dir, f"chunk_{chunk_index}")
+    with open(chunk_path, "wb") as f_out:
+        f_out.write(chunk_bytes)
+
+    existing_chunks = [c for c in os.listdir(chunk_dir) if c.startswith("chunk_")]
+    if len(existing_chunks) < total_chunks:
+        return {
+            "status": "uploading",
+            "file_id": file_id,
+            "chunks_received": len(existing_chunks),
+            "total_chunks": total_chunks,
+            "progress_percent": int(round((len(existing_chunks) / total_chunks) * 100)),
+        }
+
+    # All chunks received -> assemble complete file
+    full_bytes = bytearray()
+    for idx in range(total_chunks):
+        p = os.path.join(chunk_dir, f"chunk_{idx}")
+        if not os.path.exists(p):
+            raise HTTPException(status_code=400, detail=f"Missing chunk index {idx}")
+        with open(p, "rb") as f_in:
+            full_bytes.extend(f_in.read())
+
+    # Clean up temporary chunk files
+    try:
+        import shutil
+        shutil.rmtree(chunk_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+    full_bytes = bytes(full_bytes)
+    content_hash = hashlib.sha256(full_bytes).hexdigest()
+
+    cid = collection_id.strip() if isinstance(collection_id, str) and collection_id.strip() else f"col_{uuid.uuid4().hex[:12]}"
+    job_id = f"job_{uuid.uuid4().hex[:12]}"
+
+    # Content-hash deduplication: if identical document was already processed, complete immediately
+    if content_hash in material_chunks_cache:
+        cached_format, cached_chunks = material_chunks_cache[content_hash]
+        doc_id = f"doc_{content_hash[:8]}_{clean_filename[:20]}"
+
+        col = material_collections.get(cid)
+        if col is None:
+            col = MaterialCollection(collection_id=cid, name=collection_name or clean_filename, user_id=user_id)
+            material_collections[cid] = col
+
+        if not any(d.content_hash == content_hash for d in col.documents):
+            col.documents.append(
+                MaterialDocument(
+                    doc_id=doc_id,
+                    filename=clean_filename,
+                    mime_type=cached_format,
+                    format=cached_format,
+                    size_bytes=len(full_bytes),
+                    chunk_count=len(cached_chunks),
+                    content_hash=content_hash,
+                    status="completed",
+                )
+            )
+            col.all_chunks.extend(cached_chunks)
+
+        job_record = IngestionJobRecord(
+            job_id=job_id,
+            file_id=file_id,
+            filename=clean_filename,
+            format=cached_format,
+            stage="completed",
+            progress_percent=100,
+            collection_id=cid,
+            doc_id=doc_id,
+            chunk_count=len(cached_chunks),
+            created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        )
+        ingestion_jobs[job_id] = job_record
+        return {
+            "status": "completed",
+            "job_id": job_id,
+            "file_id": file_id,
+            "collection_id": cid,
+            "doc_id": doc_id,
+            "chunk_count": len(cached_chunks),
+            "cached": True,
+        }
+
+    # Register initial job record
+    job_record = IngestionJobRecord(
+        job_id=job_id,
+        file_id=file_id,
+        filename=clean_filename,
+        format=ext.lstrip("."),
+        stage="uploaded",
+        progress_percent=100,
+        collection_id=cid,
+        created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    )
+    ingestion_jobs[job_id] = job_record
+
+    # Launch background processing task
+    asyncio.create_task(
+        run_ingestion_job(
+            job_id=job_id,
+            full_bytes=full_bytes,
+            clean_filename=clean_filename,
+            ext=ext,
+            content_hash=content_hash,
+            cid=cid,
+            collection_name=collection_name,
+            user_id=user_id,
+            sb_client=sb_client,
+        )
+    )
+
+    return {
+        "status": "uploaded",
+        "job_id": job_id,
+        "file_id": file_id,
+        "collection_id": cid,
+    }
+
+
+@app.get("/job-status")
+async def get_job_status(job_id: str):
+    """Poll the status of an asynchronous file ingestion job."""
+    job = ingestion_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
 @app.get("/collections")
 async def list_collections_api(
     authorization: str | None = Header(None),

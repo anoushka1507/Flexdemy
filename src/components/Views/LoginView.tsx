@@ -1,36 +1,87 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ViewMode } from '../../types';
 import { supabase } from '../../supabaseClient';
+import { applyAuthThemeBoundary, restoreDashboardTheme } from '../../utils/theme';
 
 interface LoginViewProps {
   setCurrentView: (view: ViewMode) => void;
-  dyslexiaMode: boolean;
-  setDyslexiaMode: (enabled: boolean) => void;
+  dyslexiaMode?: boolean;
+  setDyslexiaMode?: (enabled: boolean) => void;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({
   setCurrentView,
-  dyslexiaMode,
-  setDyslexiaMode,
 }) => {
   const [email, setEmail] = useState('');
-const [password, setPassword] = useState('');
-const [showPassword, setShowPassword] = useState(false);
-const [error, setError] = useState('');
-const [loading, setLoading] = useState(false);
-const [mode, setMode] = useState<'login' | 'signup'>('login');
-const [signupMessage, setSignupMessage] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login');
+  const [signupMessage, setSignupMessage] = useState('');
+
+  // Enforce Light theme boundary strictly on authentication pages
+  useEffect(() => {
+    applyAuthThemeBoundary();
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
-  e.preventDefault();
+    e.preventDefault();
 
-  setError('');
-  setSignupMessage('');
-  setLoading(true);
+    setError('');
+    setSignupMessage('');
+    setLoading(true);
 
-  if (mode === 'signup') {
+    if (mode === 'forgot') {
+      if (!email.trim()) {
+        setError('Please enter your email address.');
+        setLoading(false);
+        return;
+      }
+      try {
+        const { error: resetErr } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: window.location.origin,
+        });
+        setLoading(false);
+        if (resetErr) {
+          setError(resetErr.message);
+          return;
+        }
+        setSignupMessage('Password reset instructions have been sent to your email.');
+      } catch (err: any) {
+        setLoading(false);
+        setError(err.message || 'Failed to send reset link.');
+      }
+      return;
+    }
 
-    const { data, error } = await supabase.auth.signUp({
+    if (mode === 'signup') {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+
+      setLoading(false);
+
+      if (error) {
+        setError(error.message);
+        return;
+      }
+
+      if (data.session) {
+        restoreDashboardTheme();
+        setCurrentView('dashboard');
+      } else {
+        setSignupMessage(
+          'Account created! Check your email for a confirmation link, then log in.'
+        );
+        setMode('login');
+      }
+
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
@@ -42,40 +93,15 @@ const [signupMessage, setSignupMessage] = useState('');
       return;
     }
 
-    // A session means email confirmation is off and they're
-    // signed in immediately. Otherwise they need to confirm first.
-    if (data.session) {
-      setCurrentView('dashboard');
-    } else {
-      setSignupMessage(
-        'Account created! Check your email for a confirmation link, then log in.'
-      );
-      setMode('login');
-    }
-
-    return;
-  }
-
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-
-  setLoading(false);
-
-  if (error) {
-    setError(error.message);
-    return;
-  }
-
-  setCurrentView('dashboard');
-};
+    restoreDashboardTheme();
+    setCurrentView('dashboard');
+  };
 
   return (
-    <div className="min-h-screen bg-[#f6f6fa] flex flex-col justify-between text-left">
+    <div className="min-h-screen bg-[#f6f6fa] flex flex-col justify-between text-left text-[#222138]">
       
       {/* Top Header */}
-      <header className="p-4 lg:px-12 flex items-center justify-between border-b border-[#d8d7e8] bg-white/80 backdrop-blur-md">
+      <header className="p-4 lg:px-12 flex items-center justify-between border-b border-[#d8d7e8] bg-white/90 backdrop-blur-md">
         <div className="flex items-center gap-2">
           <div className="w-10 h-10 rounded-xl bg-[#7372A5] flex items-center justify-center text-white shadow-md">
             <span className="material-symbols-outlined text-2xl">bolt</span>
@@ -86,24 +112,9 @@ const [signupMessage, setSignupMessage] = useState('');
         </div>
 
         <div className="flex items-center gap-4">
-          <div className="flex items-center gap-2 bg-[#ececf4] px-3 py-1.5 rounded-xl border border-[#d8d7e8]">
-            <span className="material-symbols-outlined text-[#7372A5] text-lg">visibility</span>
-            <span className="text-xs text-gray-700 font-medium hidden sm:inline">Dyslexia Mode: </span>
-            <span className={`text-xs font-bold ${dyslexiaMode ? 'text-[#7372A5]' : 'text-gray-500'}`}>
-              {dyslexiaMode ? 'ON' : 'OFF'}
-            </span>
-            <button
-              onClick={() => setDyslexiaMode(!dyslexiaMode)}
-              className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors ${
-                dyslexiaMode ? 'bg-[#7372A5]' : 'bg-gray-300'
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
-                  dyslexiaMode ? 'translate-x-4' : 'translate-x-0'
-                }`}
-              />
-            </button>
+          <div className="flex items-center gap-2 bg-[#ececf4] px-3.5 py-1.5 rounded-xl border border-[#d8d7e8] text-xs font-semibold text-[#7372A5]">
+            <span className="material-symbols-outlined text-sm">lock</span>
+            <span>Secure Student Access</span>
           </div>
         </div>
       </header>
@@ -173,12 +184,18 @@ const [signupMessage, setSignupMessage] = useState('');
         <div className="w-full max-w-md mx-auto bg-white rounded-3xl p-8 shadow-xl border border-[#d8d7e8] text-left">
           <div className="mb-6">
             <h2 className="text-2xl font-bold text-[#222138]">
-              {mode === 'login' ? 'Welcome back!' : 'Create your account'}
+              {mode === 'login'
+                ? 'Welcome back!'
+                : mode === 'signup'
+                ? 'Create your account'
+                : 'Reset your password'}
             </h2>
             <p className="text-xs text-gray-500 mt-1">
               {mode === 'login'
                 ? 'Sign in to access your quizzes and track performance'
-                : 'Sign up to start tracking your quizzes and mastery'}
+                : mode === 'signup'
+                ? 'Sign up to start tracking your quizzes and mastery'
+                : 'Enter your email address to receive password reset instructions'}
             </p>
           </div>
 
@@ -207,52 +224,72 @@ const [signupMessage, setSignupMessage] = useState('');
               </div>
             </div>
 
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
-                  Password
-                </label>
-                {mode === 'login' && (
-                  <a href="#forgot" className="text-xs text-[#7372A5] font-semibold hover:underline">
-                    Forgot password?
-                  </a>
-                )}
-              </div>
-              <div className="relative">
-                <span className="material-symbols-outlined absolute left-3 top-3 text-gray-400 text-lg">
-                  lock
-                </span>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#7372A5] text-sm font-medium"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
-                >
-                  <span className="material-symbols-outlined text-lg">
-                    {showPassword ? 'visibility_off' : 'visibility'}
+            {mode !== 'forgot' && (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider">
+                    Password
+                  </label>
+                  {mode === 'login' && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMode('forgot');
+                        setError('');
+                        setSignupMessage('');
+                      }}
+                      className="text-xs text-[#7372A5] font-semibold hover:underline"
+                    >
+                      Forgot password?
+                    </button>
+                  )}
+                </div>
+                <div className="relative">
+                  <span className="material-symbols-outlined absolute left-3 top-3 text-gray-400 text-lg">
+                    lock
                   </span>
-                </button>
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-[#7372A5] text-sm font-medium"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+                  >
+                    <span className="material-symbols-outlined text-lg">
+                      {showPassword ? 'visibility_off' : 'visibility'}
+                    </span>
+                  </button>
+                </div>
               </div>
-            </div>
-{error && (
-  <p className="text-sm text-red-500">
-    {error}
-  </p>
-)}
+            )}
+
+            {error && (
+              <p className="text-sm text-red-500">
+                {error}
+              </p>
+            )}
+
             <button
-  type="submit"
-  disabled={loading}
-  className="w-full py-3 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-sm shadow-md transition-all disabled:opacity-50"
->
-  {loading
-    ? (mode === 'login' ? 'Logging in...' : 'Creating account...')
-    : (mode === 'login' ? 'Log In' : 'Create Account')}
-</button>
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-sm shadow-md transition-all disabled:opacity-50"
+            >
+              {loading
+                ? mode === 'login'
+                  ? 'Logging in...'
+                  : mode === 'signup'
+                  ? 'Creating account...'
+                  : 'Sending reset link...'
+                : mode === 'login'
+                ? 'Log In'
+                : mode === 'signup'
+                ? 'Create Account'
+                : 'Send Reset Link'}
+            </button>
           </form>
 
           <p className="text-center text-xs text-gray-500 mt-4">
@@ -271,7 +308,7 @@ const [signupMessage, setSignupMessage] = useState('');
                   Sign up
                 </button>
               </>
-            ) : (
+            ) : mode === 'signup' ? (
               <>
                 Already have an account?{' '}
                 <button
@@ -284,6 +321,21 @@ const [signupMessage, setSignupMessage] = useState('');
                   className="text-[#7372A5] font-bold hover:underline"
                 >
                   Log in
+                </button>
+              </>
+            ) : (
+              <>
+                Remember your password?{' '}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('login');
+                    setError('');
+                    setSignupMessage('');
+                  }}
+                  className="text-[#7372A5] font-bold hover:underline"
+                >
+                  Back to log in
                 </button>
               </>
             )}
@@ -333,7 +385,10 @@ const [signupMessage, setSignupMessage] = useState('');
 
           <button
             type="button"
-            onClick={() => setCurrentView('dashboard')}
+            onClick={() => {
+              restoreDashboardTheme();
+              setCurrentView('dashboard');
+            }}
             className="w-full mt-2 py-2.5 rounded-xl border border-dashed border-gray-300 hover:bg-gray-50 flex items-center justify-center gap-2 text-xs font-bold text-gray-500 transition-colors"
           >
             <span className="material-symbols-outlined text-base">person_outline</span>

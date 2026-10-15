@@ -115,7 +115,7 @@ export const WeakTopicRevisionModal: React.FC<WeakTopicRevisionModalProps> = ({
               </h3>
             </div>
             <p className="text-xs text-purple-100 mt-0.5">
-              Grounded in {primaryLocator} • Active recall, high-yield notes, and audio briefing
+              Based on {primaryLocator} • Key revision notes and read-aloud audio
             </p>
           </div>
 
@@ -190,7 +190,7 @@ export const WeakTopicRevisionModal: React.FC<WeakTopicRevisionModalProps> = ({
             }`}
           >
             <span className="material-symbols-outlined text-base">headphones</span>
-            <span>Audio Brief</span>
+            <span>Listen to Your Revision</span>
           </button>
         </div>
 
@@ -317,7 +317,7 @@ export const WeakTopicRevisionModal: React.FC<WeakTopicRevisionModalProps> = ({
               <div className="p-4 rounded-2xl bg-purple-50/80 border border-purple-200 flex items-center justify-between flex-wrap gap-3">
                 <div className="space-y-0.5">
                   <h4 className="font-extrabold text-xs text-[#222138]">
-                    Spoken Audio Brief: {topic}
+                    Listen to Your Revision: {topic}
                   </h4>
                   <p className="text-[11px] text-gray-500">
                     Listen to a concise, spoken review of key principles and common pitfalls.

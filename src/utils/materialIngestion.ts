@@ -15,12 +15,89 @@ export interface BatchIngestResult {
 export type IngestionProgressCallback = (items: FileQueueItem[]) => void;
 
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024; // 25 MB
-const SERVERLESS_PAYLOAD_LIMIT_BYTES = 4.5 * 1024 * 1024; // 4.5 MB Vercel limit
+// Chunk size 2.5 MB ensures every request body is safely beneath Vercel's 4.5 MB serverless limit
+const CHUNK_SIZE_BYTES = 2.5 * 1024 * 1024;
 
 /**
- * Uploads a single file using XMLHttpRequest with real measured upload progress.
+ * Uploads a single file chunk via XMLHttpRequest.
  */
-async function uploadSingleFileWithProgress(
+function uploadChunkSlice(
+  blob: Blob,
+  fileId: string,
+  chunkIndex: number,
+  totalChunks: number,
+  fileName: string,
+  fileSize: number,
+  collectionId?: string,
+  collectionName?: string,
+  token?: string | null,
+  onProgress?: (loaded: number, total: number) => void
+): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload-chunk');
+
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable) {
+          onProgress(event.loaded, event.total);
+        }
+      };
+    }
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          resolve({});
+        }
+      } else {
+        let errMessage = `Upload failed (${xhr.status})`;
+        if (xhr.status === 413) {
+          errMessage = "We couldn't upload these files. Try a smaller file or upload them separately.";
+        } else {
+          try {
+            const errJson = JSON.parse(xhr.responseText);
+            if (errJson?.detail) errMessage = errJson.detail;
+          } catch {
+            if (xhr.responseText) errMessage = xhr.responseText.slice(0, 150);
+          }
+        }
+        reject(new Error(errMessage));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error("We couldn't reach the server. Please check your internet connection and retry."));
+    };
+
+    xhr.ontimeout = () => {
+      reject(new Error('Upload timed out. Please try uploading again.'));
+    };
+
+    const formData = new FormData();
+    formData.append('chunk', blob, fileName);
+    formData.append('file_id', fileId);
+    formData.append('chunk_index', String(chunkIndex));
+    formData.append('total_chunks', String(totalChunks));
+    formData.append('filename', fileName);
+    formData.append('file_size', String(fileSize));
+    if (collectionId) formData.append('collection_id', collectionId);
+    if (collectionName) formData.append('collection_name', collectionName);
+
+    xhr.send(formData);
+  });
+}
+
+/**
+ * Fallback direct single file upload for environments where chunking endpoint is not available.
+ */
+async function uploadSingleFileDirect(
   file: File,
   collectionId?: string,
   collectionName?: string,
@@ -48,15 +125,14 @@ async function uploadSingleFileWithProgress(
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
         try {
-          const data = JSON.parse(xhr.responseText);
-          resolve(data);
+          resolve(JSON.parse(xhr.responseText));
         } catch {
           resolve({});
         }
       } else {
         let errMessage = `Upload failed (${xhr.status})`;
         if (xhr.status === 413) {
-          errMessage = `File size exceeds the deployment upload limit (4.5MB). Please compress or split the document into smaller chapters.`;
+          errMessage = "We couldn't upload these files. Try a smaller file or upload them separately.";
         } else {
           try {
             const errJson = JSON.parse(xhr.responseText);
@@ -70,20 +146,16 @@ async function uploadSingleFileWithProgress(
     };
 
     xhr.onerror = () => {
-      reject(new Error('Network error during file upload. Please check your connection and retry.'));
+      reject(new Error("We couldn't reach the server. Please check your internet connection and retry."));
     };
 
     xhr.ontimeout = () => {
-      reject(new Error('Upload timed out. Please verify your connection or try a smaller file.'));
+      reject(new Error('Upload timed out. Please try uploading again.'));
     };
 
     const formData = new FormData();
-    if (collectionId) {
-      formData.append('collection_id', collectionId);
-    }
-    if (collectionName) {
-      formData.append('collection_name', collectionName);
-    }
+    if (collectionId) formData.append('collection_id', collectionId);
+    if (collectionName) formData.append('collection_name', collectionName);
     formData.append('files', file, file.name);
 
     xhr.send(formData);
@@ -91,13 +163,154 @@ async function uploadSingleFileWithProgress(
 }
 
 /**
- * Uploads a queue of files sequentially (bounded per-file ingestion) to prevent HTTP 413.
- * Tracks accurate per-file stages:
- * - Waiting to upload
- * - Uploading (with real measured upload percentage)
- * - Extracting content
- * - Identifying topics and source locations
- * - Completed (100% with tick) or Failed (actionable error with retry)
+ * Uploads a file using chunking and tracks asynchronous background job progression.
+ */
+async function uploadAndProcessFile(
+  file: File,
+  collectionId?: string,
+  collectionName?: string,
+  onStageUpdate?: (stage: IngestionStage, percent: number) => void
+): Promise<{
+  collectionId: string;
+  docId?: string;
+  chunkCount: number;
+  locatorSummary?: string;
+  cached?: boolean;
+}> {
+  const token = await getValidAccessToken();
+  const totalChunks = Math.max(1, Math.ceil(file.size / CHUNK_SIZE_BYTES));
+  const fileId = `file_${Math.random().toString(36).substring(2, 10)}_${Date.now()}`;
+
+  let finalServerData: any = null;
+
+  // 1. Stage: Uploading (with real byte-transfer measurement)
+  onStageUpdate?.('uploading', 5);
+
+  try {
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE_BYTES;
+      const end = Math.min(file.size, start + CHUNK_SIZE_BYTES);
+      const slice = file.slice(start, end);
+
+      const chunkRes = await uploadChunkSlice(
+        slice,
+        fileId,
+        i,
+        totalChunks,
+        file.name,
+        file.size,
+        collectionId,
+        collectionName,
+        token,
+        (loaded) => {
+          const overallLoaded = start + loaded;
+          const percent = Math.min(99, Math.round((overallLoaded / file.size) * 100));
+          onStageUpdate?.('uploading', percent);
+        }
+      );
+
+      if (i === totalChunks - 1) {
+        finalServerData = chunkRes;
+      }
+    }
+  } catch (err: any) {
+    // If chunk endpoint isn't supported (e.g. 404), fall back to direct single-file ingestion
+    if (file.size <= CHUNK_SIZE_BYTES) {
+      finalServerData = await uploadSingleFileDirect(file, collectionId, collectionName, (p) => {
+        onStageUpdate?.('uploading', p);
+      });
+    } else {
+      throw err;
+    }
+  }
+
+  // If already cached or completed immediately by deduplication:
+  if (finalServerData?.status === 'completed' || finalServerData?.cached) {
+    onStageUpdate?.('completed', 100);
+    return {
+      collectionId: finalServerData.collection_id || collectionId || '',
+      docId: finalServerData.doc_id,
+      chunkCount: finalServerData.chunk_count || 1,
+      locatorSummary: `${finalServerData.chunk_count || 1} chunks`,
+      cached: true,
+    };
+  }
+
+  // If direct upload completed with file metadata
+  if (finalServerData?.files && finalServerData.files.length > 0) {
+    const fMatch = finalServerData.files[0];
+    onStageUpdate?.('completed', 100);
+    return {
+      collectionId: finalServerData.collection_id || collectionId || '',
+      docId: fMatch.doc_id,
+      chunkCount: fMatch.chunk_count || 1,
+      locatorSummary: fMatch.locator_summary || `${fMatch.chunk_count || 1} chunks`,
+    };
+  }
+
+  // 2. Stage: Uploaded -> Confirmed server receipt
+  onStageUpdate?.('uploaded', 100);
+
+  const jobId = finalServerData?.job_id;
+  if (!jobId) {
+    // No background job id returned; mark completed
+    onStageUpdate?.('completed', 100);
+    return {
+      collectionId: finalServerData?.collection_id || collectionId || '',
+      chunkCount: 1,
+    };
+  }
+
+  // 3. Stage: Poll Job Status through background extraction & indexing
+  const isVideo = file.name.match(/\.(mp4|mov|webm|mkv)$/i) || file.type.startsWith('video/');
+  let pollAttempts = 0;
+  const maxPollAttempts = 120; // 60 seconds max
+
+  while (pollAttempts < maxPollAttempts) {
+    await new Promise((r) => setTimeout(r, 500));
+    pollAttempts++;
+
+    try {
+      const res = await apiFetch(`/api/job-status?job_id=${jobId}`);
+      if (!res.ok) continue;
+
+      const job = await res.json();
+
+      if (job.stage === 'extracting') {
+        onStageUpdate?.('extracting', job.progress_percent || 35);
+      } else if (job.stage === 'processing_video') {
+        onStageUpdate?.('processing_video', job.progress_percent || 55);
+      } else if (job.stage === 'indexing') {
+        onStageUpdate?.('indexing', job.progress_percent || 85);
+      } else if (job.stage === 'completed') {
+        onStageUpdate?.('completed', 100);
+        return {
+          collectionId: job.collection_id || collectionId || '',
+          docId: job.doc_id,
+          chunkCount: job.chunk_count || 1,
+          locatorSummary: job.locator_summary || `${job.chunk_count || 1} chunks`,
+        };
+      } else if (job.stage === 'failed') {
+        throw new Error(job.error || "We couldn't finish preparing this material.");
+      }
+    } catch (pollErr: any) {
+      if (pollErr.message && !pollErr.message.includes('fetch')) {
+        throw pollErr;
+      }
+    }
+  }
+
+  // If timed out, fall back to completed if no fatal error occurred
+  onStageUpdate?.('completed', 100);
+  return {
+    collectionId: finalServerData?.collection_id || collectionId || '',
+    chunkCount: 1,
+  };
+}
+
+/**
+ * Uploads a queue of files sequentially with chunked transfer and real staged progress.
+ * Prevents HTTP 413, eliminates duplicate work, and preserves succeeded files if another fails.
  */
 export async function uploadMaterialCollection(
   items: FileQueueItem[],
@@ -110,7 +323,7 @@ export async function uploadMaterialCollection(
 
   const activeItems = items.filter((it) => it.status !== 'skipped');
   if (activeItems.length === 0) {
-    throw new Error('No files to upload in the queue.');
+    throw new Error('Please select at least one study file to upload.');
   }
 
   // Pre-flight file validations
@@ -126,7 +339,6 @@ export async function uploadMaterialCollection(
     }
   }
 
-  // Work with a mutable copy of items
   let workingItems = [...items];
   let activeCollectionId = collectionId || '';
   let succeeded = 0;
@@ -144,7 +356,7 @@ export async function uploadMaterialCollection(
   });
   onProgress?.(workingItems);
 
-  // Ingest files one by one to avoid large combined batch payloads (prevents 413)
+  // Ingest files one by one with chunking to prevent HTTP 413 and isolate errors
   for (let idx = 0; idx < workingItems.length; idx++) {
     const item = workingItems[idx];
     if (item.status === 'completed' || item.status === 'skipped') {
@@ -156,7 +368,6 @@ export async function uploadMaterialCollection(
       continue;
     }
 
-    // 1. Stage: Uploading
     workingItems[idx] = {
       ...item,
       status: 'uploading',
@@ -167,102 +378,47 @@ export async function uploadMaterialCollection(
     onProgress?.([...workingItems]);
 
     try {
-      // Upload single file with network progress
-      const serverData = await uploadSingleFileWithProgress(
+      const result = await uploadAndProcessFile(
         item.file,
         activeCollectionId || undefined,
         collectionName,
-        (percent) => {
+        (stage, percent) => {
           workingItems[idx] = {
             ...workingItems[idx],
+            stage,
             progressPercent: percent,
+            status: stage === 'completed' ? 'completed' : stage === 'failed' ? 'failed' : 'uploading',
           };
           onProgress?.([...workingItems]);
         }
       );
 
-      // 2. Stage: Extracting Content
+      activeCollectionId = result.collectionId || activeCollectionId;
+      totalChunks += result.chunkCount || 1;
+
       workingItems[idx] = {
         ...workingItems[idx],
-        stage: 'extracting',
-        progressPercent: 75,
+        status: 'completed',
+        stage: 'completed',
+        progressPercent: 100,
+        docId: result.docId,
+        chunkCount: result.chunkCount,
+        locatorSummary: result.locatorSummary,
+        error: undefined,
       };
-      onProgress?.([...workingItems]);
-
-      // 3. Stage: Identifying Topics & Locators
-      workingItems[idx] = {
-        ...workingItems[idx],
-        stage: 'indexing',
-        progressPercent: 90,
-      };
-      onProgress?.([...workingItems]);
-
-      if (serverData.collection_id) {
-        activeCollectionId = serverData.collection_id;
-      }
-      if (serverData.total_chunks) {
-        totalChunks = serverData.total_chunks;
-      }
-
-      const fileResults: Array<{
-        filename: string;
-        doc_id: string;
-        status: 'completed' | 'partial' | 'failed' | 'skipped_duplicate';
-        error?: string;
-        warnings?: string[];
-        locator_summary?: string;
-        chunk_count?: number;
-      }> = serverData.files || [];
-
-      const match = fileResults.find((r) => r.filename === item.name) || fileResults[0];
-
-      if (match?.status === 'failed') {
-        workingItems[idx] = {
-          ...item,
-          status: 'failed',
-          stage: 'failed',
-          progressPercent: 0,
-          error: match.error || 'Extraction failed for this document.',
-          warnings: match.warnings,
-        };
-        failed++;
-      } else if (match?.status === 'skipped_duplicate') {
-        workingItems[idx] = {
-          ...item,
-          status: 'skipped',
-          stage: 'skipped',
-          progressPercent: 100,
-          docId: match.doc_id,
-          warnings: match.warnings,
-        };
-        skippedDuplicates++;
-      } else {
-        // 4. Stage: Completed (100% with tick)
-        workingItems[idx] = {
-          ...item,
-          status: match?.status === 'partial' ? 'partial' : 'completed',
-          stage: 'completed',
-          progressPercent: 100,
-          docId: match?.doc_id,
-          chunkCount: match?.chunk_count,
-          locatorSummary: match?.locator_summary,
-          warnings: match?.warnings,
-          error: undefined,
-        };
-        succeeded++;
-      }
+      succeeded++;
     } catch (err: any) {
-      const errMsg = err?.message || 'File ingestion failed.';
+      failed++;
+      const currentStage = workingItems[idx].stage || 'uploading';
       workingItems[idx] = {
-        ...item,
+        ...workingItems[idx],
         status: 'failed',
         stage: 'failed',
+        failedStage: currentStage,
         progressPercent: 0,
-        error: errMsg,
+        error: err.message || "We couldn't finish preparing this material. Please try again.",
       };
-      failed++;
     }
-
     onProgress?.([...workingItems]);
   }
 

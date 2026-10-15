@@ -292,9 +292,9 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
         <div className="p-5 bg-[#7372A5] text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div>
-              <h3 className="font-bold text-lg font-display">Generate AI Adaptive Quiz</h3>
+              <h3 className="font-bold text-lg font-display">Create a Practice Quiz</h3>
               <p className="text-xs text-gray-200">
-                Upload one or more study files (PDF, slides, text, video) or enter notes
+                Upload your study materials (PDF, slides, notes, video) to create practice questions
               </p>
             </div>
           </div>
@@ -351,7 +351,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
           {/* Multi-File Queue */}
           <div>
             <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
-              Study Materials (Multi-File Ingestion)
+              Upload and Prepare Materials
             </label>
             <MultiFileQueue
               items={fileQueue}
@@ -434,7 +434,7 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-sm text-[#7372A5]">assignment_turned_in</span>
-                <span className="text-xs font-bold text-[#222138]">Diagnostic Placement Mode (Cold-Start)</span>
+                <span className="text-xs font-bold text-[#222138]">Find Your Starting Level</span>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
                 <input
@@ -455,8 +455,8 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
             </div>
             <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-normal">
               {isDiagnosticMode
-                ? 'Active: Selects 1 representative question per major topic across your uploaded materials to calibrate your personalized learning path.'
-                : 'Recommended for intake calibration to assess baseline knowledge before adaptive quizzing.'}
+                ? 'Active: Selects 1 representative question per major topic to assess your baseline knowledge and personalise your study plan.'
+                : 'Recommended to discover which topics need practice before taking full quizzes.'}
             </p>
           </div>
 
@@ -543,12 +543,12 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
               {loading ? (
                 <>
                   <span className="material-symbols-outlined text-lg animate-spin">sync</span>
-                  <span>AI is Analyzing Collection & Building Quiz...</span>
+                  <span>Preparing your practice quiz...</span>
                 </>
               ) : (
                 <>
                   <span className="material-symbols-outlined text-lg">play_arrow</span>
-                  <span>Generate & Start Quiz Now</span>
+                  <span>Create a Practice Quiz</span>
                 </>
               )}
             </button>

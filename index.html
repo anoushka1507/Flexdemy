@@ -8,6 +8,26 @@
     <script>
       (function() {
         try {
+          // Check if there is an active Supabase session in localStorage
+          var hasSession = false;
+          for (var i = 0; i < localStorage.length; i++) {
+            var key = localStorage.key(i);
+            if (key && (key.indexOf('-auth-token') !== -1 || key.indexOf('supabase.auth.token') !== -1)) {
+              var item = localStorage.getItem(key);
+              if (item && item.indexOf('access_token') !== -1) {
+                hasSession = true;
+                break;
+              }
+            }
+          }
+          // If unauthenticated, always enforce Flexdemy light theme for auth pages to prevent dark flash
+          if (!hasSession) {
+            document.documentElement.classList.remove('dark');
+            document.documentElement.setAttribute('data-theme', 'light');
+            document.documentElement.style.colorScheme = 'light';
+            return;
+          }
+
           var saved = localStorage.getItem('flexdemy_theme') || 'system';
           var isDark = saved === 'dark' || (saved === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
           if (isDark) {

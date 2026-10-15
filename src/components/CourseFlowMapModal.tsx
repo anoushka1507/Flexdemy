@@ -536,7 +536,7 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                   </span>
                 </div>
                 <span className="text-[11px] font-bold text-gray-400">
-                  Topic Connections • 0 LLM Tokens
+                  Topic Connections
                 </span>
               </div>
 

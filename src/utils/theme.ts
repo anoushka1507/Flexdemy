@@ -90,6 +90,40 @@ export function syncThemeWithDyslexia(isDyslexia: boolean, storedTheme?: ThemeMo
   }
 }
 
+/**
+ * Applies the dedicated Flexdemy Light theme boundary for authentication pages
+ * (Login, Signup, Forgot/Reset Password, Logged-out screens).
+ * Enforces light theme on DOM root and removes dyslexia-mode without altering
+ * the user's stored dashboard preference in localStorage.
+ */
+export function applyAuthThemeBoundary(): void {
+  if (typeof document === 'undefined') return;
+  const root = document.documentElement;
+  root.classList.remove('dark');
+  root.setAttribute('data-theme', 'light');
+  root.style.colorScheme = 'light';
+  document.body?.classList.remove('dyslexia-mode');
+}
+
+/**
+ * Restores the user's saved dashboard theme (light/dark/system) and Dyslexia mode
+ * when navigating from authentication pages into the dashboard.
+ */
+export function restoreDashboardTheme(
+  preferredTheme?: ThemeMode,
+  isDyslexia?: boolean
+): void {
+  if (typeof document === 'undefined') return;
+  const theme = preferredTheme || getStoredTheme();
+  const dyslexia =
+    isDyslexia !== undefined
+      ? isDyslexia
+      : typeof localStorage !== 'undefined'
+      ? localStorage.getItem(DYSLEXIA_STORAGE_KEY) === 'true'
+      : false;
+  syncThemeWithDyslexia(dyslexia, theme);
+}
+
 export function initTheme(): { theme: ThemeMode; resolvedTheme: 'light' | 'dark' } {
   const theme = getStoredTheme();
   const resolvedTheme = applyTheme(theme);

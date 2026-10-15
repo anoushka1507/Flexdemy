@@ -144,7 +144,7 @@ export const MultiFileQueue: React.FC<MultiFileQueueProps> = ({
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-700">
           <span className="material-symbols-outlined text-xs">schedule</span>
-          Waiting to upload
+          Waiting to start
         </span>
       );
     }
@@ -157,7 +157,16 @@ export const MultiFileQueue: React.FC<MultiFileQueueProps> = ({
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
           </svg>
-          Uploading {pct}%
+          Uploading {pct > 0 ? `${pct}%` : ''}
+        </span>
+      );
+    }
+
+    if (item.stage === 'uploaded') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/30">
+          <span className="material-symbols-outlined text-xs">check_circle</span>
+          Uploaded
         </span>
       );
     }
@@ -174,11 +183,23 @@ export const MultiFileQueue: React.FC<MultiFileQueueProps> = ({
       );
     }
 
+    if (item.stage === 'processing_video') {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/30">
+          <svg className="animate-spin h-3 w-3 text-purple-600" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+          Processing video & audio...
+        </span>
+      );
+    }
+
     if (item.stage === 'indexing') {
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/30">
           <span className="material-symbols-outlined text-xs animate-pulse">hub</span>
-          Identifying topics & locators...
+          Indexing material...
         </span>
       );
     }
@@ -187,7 +208,7 @@ export const MultiFileQueue: React.FC<MultiFileQueueProps> = ({
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-purple-500/10 text-purple-700 dark:text-purple-300 border border-purple-500/30">
           <span className="material-symbols-outlined text-xs animate-spin">auto_awesome</span>
-          Preparing questions...
+          Preparing quiz...
         </span>
       );
     }
@@ -229,7 +250,7 @@ export const MultiFileQueue: React.FC<MultiFileQueueProps> = ({
             <svg className="w-3.5 h-3.5 text-rose-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" />
             </svg>
-            Failed
+            Failed {item.failedStage ? `(${item.failedStage})` : ''}
           </span>
         );
       case 'skipped':
@@ -242,7 +263,7 @@ export const MultiFileQueue: React.FC<MultiFileQueueProps> = ({
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-700">
             <span className="material-symbols-outlined text-xs">hourglass_empty</span>
-            Waiting to upload
+            Waiting to start
           </span>
         );
     }

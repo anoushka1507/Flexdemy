@@ -61,7 +61,9 @@ export type QueueItemStatus = 'queued' | 'uploading' | 'completed' | 'partial' |
 export type IngestionStage =
   | 'waiting'
   | 'uploading'
+  | 'uploaded'
   | 'extracting'
+  | 'processing_video'
   | 'indexing'
   | 'preparing_questions'
   | 'completed'
@@ -83,6 +85,7 @@ export interface FileQueueItem {
   docId?: string;
   chunkCount?: number;
   locatorSummary?: string;
+  failedStage?: string;
 }
 
 export interface MaterialDocumentMetadata {

@@ -166,13 +166,13 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
         {isNewStudent ? (
           <div className="space-y-3">
             <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-purple-100 text-[#7372A5] uppercase tracking-wider">
-              Diagnostic Placement Calibration
+              Find Your Starting Level
             </span>
             <h4 className="font-extrabold text-sm text-[#222138]">
-              Calibrate Your Topic Mastery Vector
+              Personalise Your Learning Journey
             </h4>
             <p className="text-xs text-gray-500 leading-relaxed">
-              You don't have a mastery profile yet. Complete a rapid diagnostic placement quiz (1 question per major topic at Medium difficulty). Your answers immediately seed your Bayesian Knowledge Tracing (BKT) baseline vector P(L_0), with 0 LLM grading overhead.
+              Take a quick placement quiz (1 question per key topic) to find your starting level and personalise your practice recommendations.
             </p>
             {onStartDiagnostic && (
               <button
@@ -180,15 +180,14 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
                 className="mt-2 px-5 py-2.5 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-md transition-all flex items-center gap-2"
               >
                 <span className="material-symbols-outlined text-sm">assignment_turned_in</span>
-                <span>Launch Diagnostic Placement Quiz</span>
+                <span>Start Placement Quiz</span>
               </button>
             )}
           </div>
         ) : (
           <div className="space-y-3">
             <p className="text-xs text-gray-500">
-              No mastery data yet — complete an adaptive quiz while signed in to
-              start building your topic mastery profile.
+              No topic progress yet — complete a practice quiz to start seeing your strengths and topics to revise.
             </p>
             {onStartDiagnostic && (
               <button
@@ -196,7 +195,7 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
                 className="mt-2 px-4 py-2 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-sm transition-all flex items-center gap-1.5"
               >
                 <span className="material-symbols-outlined text-sm">quiz</span>
-                <span>Start Diagnostic Assessment</span>
+                <span>Find Your Starting Level</span>
               </button>
             )}
           </div>
@@ -207,20 +206,17 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* BKT Mastery Radar Card */}
+      {/* Topic Mastery Progress Card */}
       <div className="bg-white p-8 rounded-3xl border border-[#d8d7e8] shadow-xs space-y-5">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h3 className="text-base font-extrabold text-[#222138]">
-              Bayesian Knowledge Tracing (BKT) Mastery
+              Your Progress by Topic
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              Psychometric mastery probability P(L) updated after every assessment attempt.
+              Tracks your understanding across topics as you answer practice questions.
             </p>
           </div>
-          <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ececf4] text-[#7372A5]">
-            Pure Math • 0 LLM Latency
-          </span>
         </div>
 
         <div className="space-y-4">
@@ -229,9 +225,9 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
 
             const badge =
               percent < 40
-                ? { label: 'Needs Remediation', color: 'bg-rose-100 text-rose-700 border-rose-200' }
+                ? { label: 'Needs Practice', color: 'bg-rose-100 text-rose-700 border-rose-200' }
                 : percent < 75
-                ? { label: 'Working Knowledge', color: 'bg-amber-100 text-amber-700 border-amber-200' }
+                ? { label: 'Making Progress', color: 'bg-amber-100 text-amber-700 border-amber-200' }
                 : { label: 'Mastered', color: 'bg-emerald-100 text-emerald-700 border-emerald-200' };
 
             const barColor =
@@ -258,13 +254,13 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
                       className="px-2.5 py-1 rounded-xl bg-purple-100/80 hover:bg-purple-200 text-[#7372A5] font-bold text-[11px] transition-all flex items-center gap-1 shadow-2xs"
                     >
                       <span className="material-symbols-outlined text-xs">auto_stories</span>
-                      <span>Revise Topic</span>
+                      <span>Revise Notes</span>
                     </button>
 
                     <span className="font-semibold text-gray-600">
-                      P(L) = {info.mastery_score.toFixed(2)}{' '}
+                      {percent}% mastery{' '}
                       <span className="text-gray-400 font-normal">
-                        ({info.times_seen} attempts)
+                        ({info.times_seen} {info.times_seen === 1 ? 'attempt' : 'attempts'})
                       </span>
                     </span>
                   </div>
@@ -282,39 +278,36 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
         </div>
       </div>
 
-      {/* Spaced Repetition Exam Planner */}
+      {/* Plan Your Exam Revision */}
       <div className="bg-white p-8 rounded-3xl border border-[#d8d7e8] shadow-xs space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
             <h3 className="text-base font-extrabold text-[#222138] flex items-center gap-2">
               <span className="material-symbols-outlined text-[#7372A5]">calendar_month</span>
-              <span>Spaced Repetition Exam Schedule</span>
+              <span>Plan Your Exam Revision</span>
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              Generates an optimal review schedule using the Ebbinghaus forgetting curve R(t) = exp(-t/S) and weak topics.
+              Create a study plan based on your exam date, available study time, and topics you need to practise.
             </p>
           </div>
-          <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-[#ececf4] text-[#7372A5]">
-            Deterministic • 0 API Tokens
-          </span>
         </div>
 
         {/* Inputs */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-[#f8f8fc] p-4 rounded-2xl border border-[#e8e8f2]">
           <div>
             <label className="text-xs font-bold text-gray-700 block mb-1">
-              Days Until Exam
+              Time Until Exam
             </label>
             <select
               value={examDays}
               onChange={(e) => setExamDays(Number(e.target.value))}
               className="w-full px-3 py-2 rounded-xl bg-white border border-[#d8d7e8] text-xs font-semibold text-[#222138]"
             >
-              <option value={3}>3 Days (Crash Course)</option>
-              <option value={5}>5 Days (Intensive)</option>
-              <option value={7}>7 Days (Standard Week)</option>
-              <option value={14}>14 Days (Comprehensive)</option>
-              <option value={21}>21 Days (Spaced Mastery)</option>
+              <option value={3}>3 days</option>
+              <option value={5}>5 days</option>
+              <option value={7}>7 days</option>
+              <option value={14}>14 days</option>
+              <option value={21}>21 days</option>
             </select>
           </div>
 
@@ -327,10 +320,10 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
               onChange={(e) => setDailyMinutes(Number(e.target.value))}
               className="w-full px-3 py-2 rounded-xl bg-white border border-[#d8d7e8] text-xs font-semibold text-[#222138]"
             >
-              <option value={30}>30 Minutes</option>
-              <option value={45}>45 Minutes</option>
-              <option value={60}>60 Minutes</option>
-              <option value={90}>90 Minutes</option>
+              <option value={30}>30 minutes</option>
+              <option value={45}>45 minutes</option>
+              <option value={60}>60 minutes</option>
+              <option value={90}>90 minutes</option>
             </select>
           </div>
 
@@ -341,11 +334,11 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({
               className="w-full py-2.5 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-md transition-all flex items-center justify-center gap-1.5"
             >
               {scheduleLoading ? (
-                <span>Calculating curve...</span>
+                <span>Creating study plan...</span>
               ) : (
                 <>
                   <span className="material-symbols-outlined text-sm">schedule</span>
-                  <span>Build Study Plan</span>
+                  <span>Create My Study Plan</span>
                 </>
               )}
             </button>

@@ -1,6 +1,7 @@
 import React, {
   useEffect,
   useState,
+  useRef,
 } from 'react';
 
 import { TutorChatPanel } from '../../components/TutorChatPanel';
@@ -176,6 +177,11 @@ export const ActiveQuizView: React.FC<
     setSpeechSpeed,
   ] = useState(0.85);
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const isSubmittingRef = useRef(false);
+  const hasSubmittedRef = useRef(false);
+
 
   // ----------------------------------------------------------
   // Timer
@@ -233,6 +239,10 @@ export const ActiveQuizView: React.FC<
     setFeedbackState({});
     setPendingNextQuestion(null);
     setAnsweredCorrectly({});
+    hasSubmittedRef.current = false;
+    isSubmittingRef.current = false;
+    setIsSubmitting(false);
+    setSubmitError(null);
   }, [quiz.id, adaptiveSessionId]);
 
   // Persist answers in background so navigation / refresh doesn't drop answers
@@ -651,25 +661,26 @@ export const ActiveQuizView: React.FC<
   // ----------------------------------------------------------
 
   const finishQuiz = (
-    finalQuestions: Question[]
+    finalQuestions: Question[],
+    overrideAnsweredCorrectly?: Record<number, boolean>
   ) => {
+    if (hasSubmittedRef.current && !isSubmittingRef.current) return;
+    hasSubmittedRef.current = true;
+    const answeredMap = overrideAnsweredCorrectly || answeredCorrectly;
 
     let correctCount = 0;
 
     finalQuestions.forEach(
       (question) => {
-
         const openResult =
-          answeredCorrectly[
+          answeredMap[
             question.id
           ];
 
         if (openResult !== undefined) {
-
           if (openResult) {
             correctCount += 1;
           }
-
           return;
         }
 
@@ -684,14 +695,11 @@ export const ActiveQuizView: React.FC<
         ) {
           correctCount += 1;
         }
-
       }
     );
 
-
     const total =
       finalQuestions.length;
-
 
     const scorePercentage =
       total > 0
@@ -700,7 +708,6 @@ export const ActiveQuizView: React.FC<
               100
           )
         : 0;
-
 
     // --------------------------------------------------------
     // Build concept-level breakdown.
@@ -715,14 +722,11 @@ export const ActiveQuizView: React.FC<
         }
       >();
 
-
     finalQuestions.forEach(
       (question) => {
-
         const concept =
           question.concept ||
           quiz.topic;
-
 
         const existing =
           breakdown.get(
@@ -732,12 +736,10 @@ export const ActiveQuizView: React.FC<
             total: 0,
           };
 
-
         existing.total += 1;
 
-
         const openResult =
-          answeredCorrectly[
+          answeredMap[
             question.id
           ];
 
@@ -753,15 +755,12 @@ export const ActiveQuizView: React.FC<
           existing.score += 1;
         }
 
-
         breakdown.set(
           concept,
           existing
         );
-
       }
     );
-
 
     const topicBreakdown =
       Array.from(
@@ -780,38 +779,25 @@ export const ActiveQuizView: React.FC<
         })
       );
 
-
     const result: QuizResult = {
-
       quizId: quiz.id,
-
       quizTitle: quiz.title,
-
       scorePercentage,
-
       totalQuestions: total,
-
       correctAnswersCount:
         correctCount,
-
       incorrectAnswersCount:
         total - correctCount,
-
       timeSpentSeconds:
         secondsSpent,
-
       dateCompleted:
         'Just now',
-
       userAnswers:
         selectedAnswers,
-
       openEndedResults:
-        answeredCorrectly,
-
+        answeredMap,
       topicBreakdown,
     };
-
 
     const completedQuiz: Quiz = {
       ...quiz,
@@ -820,7 +806,6 @@ export const ActiveQuizView: React.FC<
       totalQuestions:
         finalQuestions.length,
     };
-
 
     try {
       localStorage.removeItem(`flexdemy_quiz_answers_${quiz.id}`);
@@ -835,20 +820,16 @@ export const ActiveQuizView: React.FC<
 
 
   // ----------------------------------------------------------
-  // ADAPTIVE NEXT QUESTION
+  // ADAPTIVE / STATIC PROGRESSION & SUBMISSION
   // ----------------------------------------------------------
 
-  const handleAdaptiveNext = () => {
-    if (!pendingNextQuestion) return;
-
-    const data = pendingNextQuestion;
-    setPendingNextQuestion(null);
-
-    if (data.completed) {
-      finishQuiz(questions);
-      return;
+  const handlePrevious = () => {
+    if (currentQuestionIndex > 0 && !adaptiveLoading && !isSubmitting) {
+      setCurrentQuestionIndex((prev) => prev - 1);
     }
+  };
 
+  const advanceToNextQuestion = (data: any) => {
     const raw = data.question;
     const rawOptions = Array.isArray(raw?.options) ? raw.options : [];
     const options = rawOptions
@@ -910,34 +891,222 @@ export const ActiveQuizView: React.FC<
     setCurrentQuestionIndex((prev) => prev + 1);
   };
 
+  const handleAdaptiveNext = () => {
+    if (!pendingNextQuestion) return;
+
+    const data = pendingNextQuestion;
+    setPendingNextQuestion(null);
+
+    if (data.completed) {
+      handleFinishQuiz();
+      return;
+    }
+
+    advanceToNextQuestion(data);
+  };
+
   const handleOpenAnswerSubmit = handleAdaptiveNext;
 
+  const handleStaticNext = () => {
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex((prev) => prev + 1);
+    } else {
+      handleFinishQuiz();
+    }
+  };
 
-  // ----------------------------------------------------------
-  // STATIC QUIZ NEXT
-  // ----------------------------------------------------------
+  const handleContinueNext = async () => {
+    if (adaptiveLoading || isSubmitting) return;
 
-  const handleStaticNext =
-    () => {
+    // If reviewing a previous question, advance to next question already in memory
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex((prev) => prev + 1);
+      return;
+    }
 
-      if (
-        currentQuestionIndex <
-        questions.length - 1
-      ) {
+    // On current newest question: ensure answer is provided
+    const currentSelected = selectedAnswers[currentQuestion.id];
+    const currentOpen = openAnswers[currentQuestion.id];
+    const hasAnswer = isMcqQuestion
+      ? currentSelected !== undefined && currentSelected !== null
+      : Boolean((currentOpen || '').trim());
 
-        setCurrentQuestionIndex(
-          (prev) => prev + 1
-        );
+    if (!hasAnswer) {
+      setAdaptiveError('Please select or enter an answer before continuing.');
+      return;
+    }
 
-      } else {
+    setAdaptiveError('');
 
-        finishQuiz(
-          questions
-        );
-
+    if (isAdaptive && adaptiveSessionId) {
+      if (feedbackState[currentQuestion.id]?.isChecked && pendingNextQuestion) {
+        handleAdaptiveNext();
+        return;
       }
-    };
 
+      setAdaptiveLoading(true);
+      try {
+        if (isMcqQuestion) {
+          const response = await apiFetch('/api/answer-adaptive-question', {
+            method: 'POST',
+            body: JSON.stringify({
+              session_id: adaptiveSessionId,
+              question_number: currentQuestion.id,
+              selected_option_index: currentSelected,
+            }),
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || 'Could not process the answer.');
+          }
+
+          const data = await response.json();
+          const wasCorrect = Boolean(data.was_correct);
+
+          setAnsweredCorrectly((prev) => ({
+            ...prev,
+            [currentQuestion.id]: wasCorrect,
+          }));
+
+          setFeedbackState((prev) => ({
+            ...prev,
+            [currentQuestion.id]: {
+              isChecked: true,
+              wasCorrect,
+              explanation:
+                data.explanation ||
+                (wasCorrect
+                  ? 'Great job! Your answer matches the source concept.'
+                  : 'Review the cited source below to master this concept.'),
+              misconception: data.misconception || null,
+              sourceLocator: data.source_locator || currentQuestion.sourceLocator || '',
+            },
+          }));
+
+          if (data.completed) {
+            handleFinishQuiz();
+            return;
+          }
+
+          advanceToNextQuestion(data);
+        } else {
+          const response = await apiFetch('/api/answer-adaptive-question-open', {
+            method: 'POST',
+            body: JSON.stringify({
+              session_id: adaptiveSessionId,
+              question_number: currentQuestion.id,
+              student_answer: currentOpen,
+            }),
+          });
+
+          if (!response.ok) {
+            const text = await response.text();
+            throw new Error(text || 'Could not process the answer.');
+          }
+
+          const data = await response.json();
+          const wasCorrect = Boolean(data.was_correct);
+
+          setAnsweredCorrectly((prev) => ({
+            ...prev,
+            [currentQuestion.id]: wasCorrect,
+          }));
+
+          setFeedbackState((prev) => ({
+            ...prev,
+            [currentQuestion.id]: {
+              isChecked: true,
+              wasCorrect,
+              explanation: data.explanation || data.feedback || (wasCorrect ? 'Correct!' : 'Incorrect.'),
+              sourceLocator: data.source_locator || currentQuestion.sourceLocator || '',
+            },
+          }));
+
+          if (data.completed) {
+            handleFinishQuiz();
+            return;
+          }
+
+          advanceToNextQuestion(data);
+        }
+      } catch (err: any) {
+        console.error('Error fetching next question:', err);
+        setAdaptiveError(err?.message || 'Error processing answer.');
+      } finally {
+        setAdaptiveLoading(false);
+      }
+    } else {
+      handleStaticNext();
+    }
+  };
+
+  const handleFinishQuiz = async () => {
+    if (isSubmitting || isSubmittingRef.current || hasSubmittedRef.current) return;
+
+    const currentSelected = selectedAnswers[currentQuestion.id];
+    const currentOpen = openAnswers[currentQuestion.id];
+    const hasAnswer = isMcqQuestion
+      ? currentSelected !== undefined && currentSelected !== null
+      : Boolean((currentOpen || '').trim());
+
+    if (!hasAnswer) {
+      setAdaptiveError('Please select or enter an answer for this question before finishing.');
+      return;
+    }
+
+    setAdaptiveError('');
+    setSubmitError(null);
+    setIsSubmitting(true);
+    isSubmittingRef.current = true;
+
+    try {
+      const updatedAnswered = { ...answeredCorrectly };
+
+      // Ensure final question's answer is recorded if not checked yet
+      if (isAdaptive && adaptiveSessionId && !feedbackState[currentQuestion.id]?.isChecked) {
+        if (isMcqQuestion) {
+          const response = await apiFetch('/api/answer-adaptive-question', {
+            method: 'POST',
+            body: JSON.stringify({
+              session_id: adaptiveSessionId,
+              question_number: currentQuestion.id,
+              selected_option_index: currentSelected,
+            }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            updatedAnswered[currentQuestion.id] = Boolean(data.was_correct);
+            setAnsweredCorrectly(updatedAnswered);
+          }
+        } else {
+          const response = await apiFetch('/api/answer-adaptive-question-open', {
+            method: 'POST',
+            body: JSON.stringify({
+              session_id: adaptiveSessionId,
+              question_number: currentQuestion.id,
+              student_answer: currentOpen,
+            }),
+          });
+          if (response.ok) {
+            const data = await response.json();
+            updatedAnswered[currentQuestion.id] = Boolean(data.was_correct);
+            setAnsweredCorrectly(updatedAnswered);
+          }
+        }
+      }
+
+      finishQuiz(questions, updatedAnswered);
+    } catch (err: any) {
+      console.error('Error submitting quiz attempt:', err);
+      setSubmitError(
+        err?.message || "We couldn't submit your quiz results. Your answers are saved — please click Finish Quiz to retry."
+      );
+      isSubmittingRef.current = false;
+      hasSubmittedRef.current = false;
+      setIsSubmitting(false);
+    }
+  };
 
   // ----------------------------------------------------------
   // CURRENT ANSWER / PROGRESS
@@ -952,14 +1121,19 @@ export const ActiveQuizView: React.FC<
         value !== undefined
     ).length;
 
+  const totalQuizQuestions = Math.max(
+    questions.length,
+    quiz.totalQuestions || 0
+  );
+
+  const isFinalQuestion = currentQuestionIndex >= totalQuizQuestions - 1;
 
   const progressPercent =
     Math.round(
       (answeredCount /
-        quiz.totalQuestions) *
+        (totalQuizQuestions || 1)) *
         100
     );
-
 
   const currentDifficulty =
     currentQuestion.difficulty ||
@@ -1559,6 +1733,19 @@ export const ActiveQuizView: React.FC<
               </div>
             )}
 
+            {submitError && (
+              <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700 flex items-center justify-between gap-3">
+                <span>{submitError}</span>
+                <button
+                  type="button"
+                  onClick={handleFinishQuiz}
+                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded font-bold text-xs shrink-0"
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+
           </div>
 
 
@@ -1570,57 +1757,85 @@ export const ActiveQuizView: React.FC<
 
             <button
               disabled={
-                isAdaptive ||
                 currentQuestionIndex === 0 ||
-                adaptiveLoading
+                adaptiveLoading ||
+                isSubmitting
               }
-              onClick={() =>
-                setCurrentQuestionIndex(
-                  (prev) => prev - 1
-                )
-              }
-              className="px-5 py-2.5 rounded-xl border border-[#d8d7e8] bg-white font-bold text-xs disabled:opacity-40"
+              onClick={handlePrevious}
+              className="px-5 py-2.5 rounded-xl border border-[#d8d7e8] bg-white font-bold text-xs disabled:opacity-40 hover:bg-gray-50 transition-colors"
             >
               ← Previous
             </button>
 
 
-            {/* Primary Action Button: Check Answer first, then Continue */}
-            {!feedbackState[currentQuestion.id]?.isChecked ? (
-              <button
-                onClick={handleCheckCurrentAnswer}
-                disabled={
-                  adaptiveLoading ||
-                  (isMcqQuestion
-                    ? selectedAnswers[currentQuestion.id] === undefined || selectedAnswers[currentQuestion.id] === null
-                    : !(openAnswers[currentQuestion.id] || '').trim())
-                }
-                className="px-6 py-2.5 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-md disabled:opacity-50 transition-all flex items-center gap-1.5"
-              >
-                <span>Check Answer</span>
-                <span className="material-symbols-outlined text-sm">check_circle</span>
-              </button>
-            ) : (
-              <button
-                onClick={
-                  isAdaptive
-                    ? (isMcqQuestion
-                        ? handleAdaptiveNext
-                        : handleOpenAnswerSubmit)
-                    : handleStaticNext
-                }
-                disabled={adaptiveLoading}
-                className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5"
-              >
-                <span>
-                  {adaptiveLoading
-                    ? 'Processing...'
-                    : currentQuestionIndex < questions.length - 1 || isAdaptive
-                    ? 'Continue to Next Question →'
-                    : 'Submit Quiz'}
-                </span>
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              {/* Optional Check Answer button to view explanation before advancing */}
+              {!feedbackState[currentQuestion.id]?.isChecked && (
+                <button
+                  type="button"
+                  onClick={handleCheckCurrentAnswer}
+                  disabled={
+                    adaptiveLoading ||
+                    isSubmitting ||
+                    (isMcqQuestion
+                      ? selectedAnswers[currentQuestion.id] === undefined || selectedAnswers[currentQuestion.id] === null
+                      : !(openAnswers[currentQuestion.id] || '').trim())
+                  }
+                  className="px-4 py-2.5 rounded-xl border border-[#7372A5]/30 text-[#7372A5] hover:bg-[#7372A5]/10 font-bold text-xs transition-all disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <span>Check Answer</span>
+                  <span className="material-symbols-outlined text-sm">visibility</span>
+                </button>
+              )}
+
+              {/* Primary Action Button */}
+              {isFinalQuestion ? (
+                <button
+                  type="button"
+                  onClick={handleFinishQuiz}
+                  disabled={
+                    isSubmitting ||
+                    adaptiveLoading ||
+                    (isMcqQuestion
+                      ? selectedAnswers[currentQuestion.id] === undefined || selectedAnswers[currentQuestion.id] === null
+                      : !(openAnswers[currentQuestion.id] || '').trim())
+                  }
+                  className="px-6 py-2.5 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-md disabled:opacity-50 transition-all flex items-center gap-1.5"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <svg className="animate-spin h-3.5 w-3.5 text-white" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      <span>Submitting…</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>Finish Quiz</span>
+                      <span className="material-symbols-outlined text-sm">task_alt</span>
+                    </>
+                  )}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleContinueNext}
+                  disabled={
+                    adaptiveLoading ||
+                    isSubmitting ||
+                    (isMcqQuestion
+                      ? selectedAnswers[currentQuestion.id] === undefined || selectedAnswers[currentQuestion.id] === null
+                      : !(openAnswers[currentQuestion.id] || '').trim())
+                  }
+                  className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md disabled:opacity-50 transition-all flex items-center gap-1.5"
+                >
+                  <span>
+                    {adaptiveLoading ? 'Processing...' : 'Continue to Next Question →'}
+                  </span>
+                </button>
+              )}
+            </div>
 
           </div>
 

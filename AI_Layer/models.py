@@ -401,7 +401,8 @@ class MaterialDocument(BaseModel):
     doc_id: str
     filename: str
     content_hash: str
-    mime_type: str
+    mime_type: str = ""
+    format: str = ""
     size_bytes: int = 0
     chunk_count: int = 0
     concept_count: int = 0

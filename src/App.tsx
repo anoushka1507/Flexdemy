@@ -12,7 +12,7 @@ import {
 
 import { supabase } from './supabaseClient';
 import { apiFetch } from './utils/api';
-import { getStoredTheme, applyTheme, subscribeToSystemTheme, syncThemeWithDyslexia } from './utils/theme';
+import { getStoredTheme, applyTheme, subscribeToSystemTheme, syncThemeWithDyslexia, applyAuthThemeBoundary, restoreDashboardTheme } from './utils/theme';
 
 import {
   INITIAL_USER_PROFILE,
@@ -147,10 +147,15 @@ export default function App() {
     }
   };
 
-  // Dyslexia Mode effect (Strictly bypasses dark mode while active, restores theme upon deactivation)
+  // Theme boundary effect: enforce light theme boundary on login/auth views,
+  // and restore dashboard theme preference when navigating into the authenticated app
   useEffect(() => {
-    syncThemeWithDyslexia(dyslexiaMode, currentTheme);
-  }, [dyslexiaMode, currentTheme]);
+    if (currentView === 'login') {
+      applyAuthThemeBoundary();
+    } else {
+      restoreDashboardTheme(currentTheme, dyslexiaMode);
+    }
+  }, [currentView, currentTheme, dyslexiaMode]);
 
   // ==========================================================
   // AUTH & PERSISTENT LEARNER PROFILE HYDRATION
@@ -439,6 +444,7 @@ export default function App() {
       localStorage.removeItem('flexdemy_active_quiz_result');
       localStorage.removeItem('flexdemy_active_quiz');
     } catch {}
+    applyAuthThemeBoundary();
     setCurrentView('login');
     setQuizResults([]);
     setQuizzesList([]);

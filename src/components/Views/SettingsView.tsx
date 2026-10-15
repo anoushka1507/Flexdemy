@@ -810,10 +810,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </p>
               <ul className="list-disc list-inside space-y-1 text-[11px] text-gray-500 dark:text-gray-400">
                 <li>Quiz attempt records, scores, and completion timestamps.</li>
-                <li>Bayesian Knowledge Tracing (BKT) topic mastery probabilities.</li>
-                <li>Extracted concepts and topic connections for Course Learning Paths.</li>
-                <li>Saved learning paths and flashcard review schedules.</li>
-                <li>Ingested multi-file collections and citations.</li>
+                <li>Topic mastery and progress records.</li>
+                <li>Extracted concepts and topic connections for your learning path.</li>
+                <li>Saved learning paths and revision notes.</li>
+                <li>Uploaded study materials and citations.</li>
               </ul>
             </div>
 
@@ -875,7 +875,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
-              This action will permanently delete all completed quiz scores, Bayesian Knowledge Tracing topic masteries, and uploaded course materials from your account. Your user login will remain active.
+              This action will permanently delete all completed quiz scores, topic mastery records, and uploaded course materials from your account. Your user login will remain active.
             </p>
 
             <div className="flex items-center justify-end gap-2 pt-2">
