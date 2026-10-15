@@ -887,11 +887,33 @@ async def save_material_collection(
             payload,
             on_conflict="collection_id",
         ).execute()
-        return True
     except Exception as e:
         logger.warning("save_material_collection Supabase upsert failed for %s: %s", cid, e)
-        # Disk cache succeeded, so attempt is not lost
-        return True
+
+    # 3. Fallback Supabase persistence into material_cache table
+    # Ensures collections remain retrievable even if material_collections table has RLS restrictions
+    if client is not None:
+        try:
+            chunks = cdata.get("all_chunks") or []
+            docs = cdata.get("documents") or []
+            first_doc = docs[0] if docs else {}
+            cache_payload: dict = {
+                "content_hash": f"col_{cid}",
+                "material_chunks": chunks,
+                "concept_drafts": [],
+                "material_content_type": first_doc.get("mime_type") or "application/json",
+                "material_filename": cdata.get("name") or first_doc.get("filename") or "Collection",
+            }
+            if user_id and is_valid_uuid(user_id):
+                cache_payload["user_id"] = user_id
+            client.table("material_cache").upsert(
+                cache_payload,
+                on_conflict="content_hash",
+            ).execute()
+        except Exception as cache_err:
+            logger.debug("save_material_collection secondary cache error for %s: %s", cid, cache_err)
+
+    return True
 
 
 async def load_material_collection(
@@ -907,7 +929,7 @@ async def load_material_collection(
         return None
     cid = collection_id.strip()
 
-    # 1. Try Supabase first
+    # 1. Try Supabase material_collections table first
     client = get_backend_persistence_client(auth_client)
     if client is not None:
         try:
@@ -932,7 +954,45 @@ async def load_material_collection(
         except Exception as e:
             logger.warning("load_material_collection Supabase query failed for %s: %s", cid, e)
 
-    # 2. Fallback to local disk cache
+        # 2. Try Supabase material_cache secondary table fallback
+        try:
+            cache_res = client.table("material_cache").select(
+                "material_chunks, material_filename, user_id"
+            ).eq("content_hash", f"col_{cid}").limit(1).execute()
+
+            c_rows = cache_res.data or []
+            if c_rows and c_rows[0].get("material_chunks"):
+                c_row = c_rows[0]
+                owner = c_row.get("user_id")
+                if owner and user_id and is_valid_uuid(user_id) and owner != user_id:
+                    logger.warning("Unauthorized material_cache access for collection %s by %s", cid, user_id)
+                    return None
+                recovered_chunks = c_row.get("material_chunks") or []
+                rec_name = c_row.get("material_filename") or "Collection"
+                reconstructed = {
+                    "collection_id": cid,
+                    "name": rec_name,
+                    "user_id": owner,
+                    "documents": [
+                        {
+                            "doc_id": f"doc_{cid}",
+                            "filename": rec_name,
+                            "mime_type": "application/json",
+                            "format": "json",
+                            "size_bytes": 0,
+                            "chunk_count": len(recovered_chunks),
+                            "content_hash": f"hash_{cid}",
+                            "status": "completed",
+                        }
+                    ],
+                    "all_chunks": recovered_chunks,
+                }
+                _save_collection_to_disk(cid, reconstructed)
+                return reconstructed
+        except Exception as e:
+            logger.debug("load_material_collection secondary cache lookup failed for %s: %s", cid, e)
+
+    # 3. Fallback to local disk cache
     disk_data = _load_collection_from_disk(cid)
     if disk_data and isinstance(disk_data, dict):
         owner = disk_data.get("user_id")

@@ -1543,7 +1543,40 @@ async def upload_file_chunk(
     )
     ingestion_jobs[job_id] = job_record
 
-    # Launch background processing task
+    is_video = ext.lower() in (".mp4", ".mov", ".webm", ".mkv")
+
+    if not is_video:
+        # Standard documents (PDF, PPTX, notes) process in ~150ms.
+        # Run synchronously so Vercel serverless lambda does not freeze before completion!
+        await run_ingestion_job(
+            job_id=job_id,
+            full_bytes=full_bytes,
+            clean_filename=clean_filename,
+            ext=ext,
+            content_hash=content_hash,
+            cid=cid,
+            collection_name=collection_name,
+            user_id=user_id,
+            sb_client=sb_client,
+        )
+        job = ingestion_jobs.get(job_id)
+        if job and job.stage == "completed":
+            return {
+                "status": "completed",
+                "job_id": job_id,
+                "file_id": file_id,
+                "collection_id": cid,
+                "doc_id": job.doc_id,
+                "chunk_count": job.chunk_count,
+                "locator_summary": job.locator_summary,
+            }
+        elif job and job.stage == "failed":
+            raise HTTPException(
+                status_code=400,
+                detail=job.error or "We couldn't finish preparing this material. Please check file format and size."
+            )
+
+    # For large media, launch background processing task
     asyncio.create_task(
         run_ingestion_job(
             job_id=job_id,
@@ -1701,23 +1734,63 @@ async def extract_concepts_api(
                     material_collections[cid] = col
                 except Exception as e:
                     logger.warning("Error loading collection %s: %s", cid, e)
-        if col is None:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Material collection '{cid}' not found. Please upload your file again or retry.",
-            )
-        if not col.all_chunks:
+        if col and col.all_chunks:
+            if col.user_id and user_id and col.user_id != user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Unauthorized: you do not have permission to access this collection.",
+                )
+            chunks = col.all_chunks
+            source_filename = col.name or (col.documents[0].filename if col.documents else f"Collection ({len(col.documents)} files)")
+        elif file is not None:
+            # SAFE AUTO-RECOVERY: Collection missing on serverless instance, but fallback file attached!
+            logger.info("Collection %s missing in /extract-concepts; auto-recovering from attached file %s", cid, file.filename)
+            try:
+                chunks = await read_uploaded_material(
+                    file,
+                    user_id=user_id,
+                    sb_client=sb_client,
+                )
+                source_filename = file.filename or "uploaded_material"
+                clean_name = os.path.basename(file.filename or "uploaded_file")
+                raw_bytes = await file.read()
+                c_hash = chunks[0].content_hash if (chunks and chunks[0].content_hash) else hashlib.sha256(raw_bytes).hexdigest()
+                rec_doc = MaterialDocument(
+                    doc_id=f"doc_{cid}_{clean_name[:20]}",
+                    filename=clean_name,
+                    mime_type=file.content_type or "application/octet-stream",
+                    format=os.path.splitext(clean_name)[1].lstrip(".") or "txt",
+                    size_bytes=len(raw_bytes),
+                    chunk_count=len(chunks),
+                    content_hash=c_hash,
+                    status="completed",
+                )
+                rec_col = MaterialCollection(
+                    collection_id=cid,
+                    name=clean_name,
+                    user_id=user_id,
+                    documents=[rec_doc],
+                    all_chunks=chunks,
+                )
+                material_collections[cid] = rec_col
+                await save_material_collection(
+                    collection_id=cid,
+                    collection_data=rec_col.model_dump(mode="json"),
+                    user_id=user_id,
+                    auth_client=sb_client,
+                )
+            except Exception as rec_err:
+                logger.warning("Auto-recovery in extract-concepts error for %s: %s", cid, rec_err)
+        elif col is not None and not col.all_chunks:
             raise HTTPException(
                 status_code=422,
                 detail=f"Material collection '{cid}' was found but contains no readable text chunks. Please ensure the uploaded file has selectable text.",
             )
-        if col.user_id and user_id and col.user_id != user_id:
+        else:
             raise HTTPException(
-                status_code=403,
-                detail="Unauthorized: you do not have permission to access this collection.",
+                status_code=404,
+                detail=f"Material collection '{cid}' not found. Please upload your file again or retry.",
             )
-        chunks = col.all_chunks
-        source_filename = col.name or (col.documents[0].filename if col.documents else f"Collection ({len(col.documents)} files)")
 
     # 2. Single-File Mode (Legacy / direct upload)
     elif file is not None:
@@ -1933,19 +2006,62 @@ async def start_adaptive_quiz(
                         material_collections[cid] = col
                     except Exception as e:
                         logger.warning("Error loading collection %s: %s", cid, e)
-            if col is None or not col.all_chunks:
+            if col and col.all_chunks:
+                if col.user_id and user_id and col.user_id != user_id:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Unauthorized: you do not have permission to access this collection.",
+                    )
+                chunks = col.all_chunks
+                material_filename = col.name or f"Collection ({len(col.documents)} files)"
+                material_mime = "application/json"
+            elif file is not None:
+                # SAFE AUTO-RECOVERY: Collection was lost across serverless instances, but fallback file was attached!
+                logger.info("Collection %s missing or empty; auto-recovering from attached file %s", cid, file.filename)
+                raw_bytes = await file.read()
+                await file.seek(0)
+                chunks = await read_uploaded_material(
+                    file,
+                    user_id=user_id,
+                    sb_client=sb_client,
+                )
+                material_filename = file.filename or "material"
+                material_mime = file.content_type or "application/octet-stream"
+                # Save recovered collection so subsequent requests/questions find it immediately
+                try:
+                    clean_name = os.path.basename(file.filename or "uploaded_file")
+                    c_hash = chunks[0].content_hash if (chunks and chunks[0].content_hash) else hashlib.sha256(raw_bytes).hexdigest()
+                    rec_doc = MaterialDocument(
+                        doc_id=f"doc_{cid}_{clean_name[:20]}",
+                        filename=clean_name,
+                        mime_type=material_mime,
+                        format=os.path.splitext(clean_name)[1].lstrip(".") or "txt",
+                        size_bytes=len(raw_bytes),
+                        chunk_count=len(chunks),
+                        content_hash=c_hash,
+                        status="completed",
+                    )
+                    rec_col = MaterialCollection(
+                        collection_id=cid,
+                        name=clean_name,
+                        user_id=user_id,
+                        documents=[rec_doc],
+                        all_chunks=chunks,
+                    )
+                    material_collections[cid] = rec_col
+                    await save_material_collection(
+                        collection_id=cid,
+                        collection_data=rec_col.model_dump(mode="json"),
+                        user_id=user_id,
+                        auth_client=sb_client,
+                    )
+                except Exception as rec_err:
+                    logger.warning("Failed to persist auto-recovered collection %s: %s", cid, rec_err)
+            else:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Material collection '{cid}' not found or contains no chunks.",
+                    detail=f"Material collection '{cid}' not found or contains no chunks. Please upload your file again or retry.",
                 )
-            if col.user_id and user_id and col.user_id != user_id:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Unauthorized: you do not have permission to access this collection.",
-                )
-            chunks = col.all_chunks
-            material_filename = col.name or f"Collection ({len(col.documents)} files)"
-            material_mime = "application/json"
         elif file is not None:
             raw_bytes = await file.read()
             await file.seek(0)

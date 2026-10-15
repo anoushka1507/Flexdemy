@@ -213,8 +213,8 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
 
       if (activeCollectionId) {
         formData.append('collection_id', activeCollectionId);
-      } else if (fileQueue.length === 1 && fileQueue[0].file) {
-        // Single file fallback
+      }
+      if (fileQueue.length === 1 && fileQueue[0].file) {
         formData.append('file', fileQueue[0].file);
       } else if (content.trim()) {
         const textBlob = new Blob([content], { type: 'text/plain' });
@@ -258,6 +258,20 @@ export const QuizUploadModal: React.FC<QuizUploadModalProps> = ({
           detail = JSON.parse(errorText)?.detail || errorText;
         } catch {
           // not JSON
+        }
+
+        // Auto-recovery: If collection is missing on the server, reset state so retry cleanly re-ingests
+        if (response.status === 404 || detail.toLowerCase().includes('not found') || detail.toLowerCase().includes('no chunks')) {
+          setCollectionId(null);
+          setFileQueue((prev) =>
+            prev.map((it) => ({
+              ...it,
+              status: 'queued',
+              stage: 'waiting',
+              progressPercent: 0,
+              error: undefined,
+            }))
+          );
         }
 
         throw new Error(detail || `Quiz generation failed (${response.status})`);

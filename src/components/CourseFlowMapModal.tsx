@@ -220,6 +220,9 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
       // 2. Extract concepts and prerequisite relations across the collection
       const formData = new FormData();
       formData.append('collection_id', ingestResult.collectionId);
+      if (fileQueue.length === 1 && fileQueue[0].file) {
+        formData.append('file', fileQueue[0].file);
+      }
 
       const response = await apiFetch('/api/extract-concepts', {
         method: 'POST',
