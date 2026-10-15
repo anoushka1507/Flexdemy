@@ -13,17 +13,19 @@ interface ConceptNode {
 interface CourseFlowMapModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onPracticeTopic?: (topic: string) => void;
 }
 
 interface RankedConcept extends ConceptNode {
   level: number; // 0: Foundations, 1: Core, 2: Advanced
-  masteryScore: number; // Bayesian Knowledge Tracing P(L)
-  masteryStatus: 'needs_practice' | 'in_progress' | 'mastered';
+  masteryScore: number | null; // Bayesian Knowledge Tracing P(L), null if unassessed
+  masteryStatus: 'needs_practice' | 'in_progress' | 'mastered' | 'not_assessed';
 }
 
 export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
   isOpen,
   onClose,
+  onPracticeTopic,
 }) => {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [concepts, setConcepts] = useState<ConceptNode[] | null>(null);
@@ -64,8 +66,18 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
   const rankedConcepts: RankedConcept[] = useMemo(() => {
     if (!concepts || concepts.length === 0) return [];
 
+    // Deduplicate concepts by normalized label
+    const dedupedMap = new Map<string, ConceptNode>();
+    for (const c of concepts) {
+      const key = (c.label || '').toLowerCase().trim();
+      if (key && !dedupedMap.has(key)) {
+        dedupedMap.set(key, c);
+      }
+    }
+    const cleanConcepts = Array.from(dedupedMap.values());
+
     const labelMap = new Map<string, ConceptNode>();
-    concepts.forEach((c) => labelMap.set(c.label.toLowerCase().trim(), c));
+    cleanConcepts.forEach((c) => labelMap.set(c.label.toLowerCase().trim(), c));
 
     // Calculate topological levels using Kahn's / Longest Path DAG algorithm
     const levels = new Map<string, number>();
@@ -73,14 +85,14 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
     // Step 1: Base level calculation with cycle detection guard (max 10 iterations)
     for (let iter = 0; iter < 10; iter++) {
       let changed = false;
-      for (const concept of concepts) {
+      for (const concept of cleanConcepts) {
         const cKey = concept.label.toLowerCase().trim();
         const currentLevel = levels.get(cKey) ?? 0;
 
         // Check prerequisites that exist in this concept pool
         const validPrereqs = (concept.prerequisites || [])
-          .map((p) => p.toLowerCase().trim())
-          .filter((p) => labelMap.has(p) && p !== cKey);
+          .map((p) => (p || '').toLowerCase().trim())
+          .filter((p) => p && labelMap.has(p) && p !== cKey);
 
         if (validPrereqs.length === 0) {
           if (!levels.has(cKey)) {
@@ -104,30 +116,32 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
       if (!changed) break;
     }
 
-    return concepts.map((c) => {
+    return cleanConcepts.map((c) => {
       const cKey = c.label.toLowerCase().trim();
       const rawLevel = levels.get(cKey) ?? 0;
       // Clamp to Tier 0, Tier 1, Tier 2
       const level = Math.min(2, rawLevel);
 
       // Lookup student BKT score P(L) for topic or concept
-      const topicScore =
-        masteryData[c.topic.toLowerCase().trim()] ??
-        masteryData[cKey] ??
-        0.30; // 0.30 default prior
+      const topicKey = (c.topic || '').toLowerCase().trim();
+      const topicScore = masteryData[topicKey] ?? masteryData[cKey];
 
-      let masteryStatus: 'needs_practice' | 'in_progress' | 'mastered' =
-        'needs_practice';
-      if (topicScore >= 0.75) {
+      // Distinguish unassessed from measured mastery: never treat missing attempts as measured mastery
+      let masteryStatus: 'needs_practice' | 'in_progress' | 'mastered' | 'not_assessed';
+      if (topicScore === undefined || topicScore === null) {
+        masteryStatus = 'not_assessed';
+      } else if (topicScore >= 0.75) {
         masteryStatus = 'mastered';
       } else if (topicScore >= 0.40) {
         masteryStatus = 'in_progress';
+      } else {
+        masteryStatus = 'needs_practice';
       }
 
       return {
         ...c,
         level,
-        masteryScore: topicScore,
+        masteryScore: topicScore ?? null,
         masteryStatus,
       };
     });
@@ -161,7 +175,14 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
       });
 
       if (!response.ok) {
-        throw new Error(`Could not analyze this file (${response.status}).`);
+        let errMessage = `Could not analyze this file (${response.status}).`;
+        try {
+          const errData = await response.json();
+          if (errData && errData.detail) {
+            errMessage = errData.detail;
+          }
+        } catch (_) {}
+        throw new Error(errMessage);
       }
 
       const data = await response.json();
@@ -179,24 +200,30 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
   const tier1 = rankedConcepts.filter((c) => c.level === 1);
   const tier2 = rankedConcepts.filter((c) => c.level >= 2);
 
-  const getStatusBadge = (status: RankedConcept['masteryStatus'], score: number) => {
+  const getStatusBadge = (status: RankedConcept['masteryStatus'], score: number | null) => {
     switch (status) {
       case 'mastered':
         return (
           <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 border border-emerald-300">
-            Mastered • P(L)={score.toFixed(2)}
+            Mastered • P(L)={score?.toFixed(2)}
           </span>
         );
       case 'in_progress':
         return (
           <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 border border-amber-300">
-            In Progress • P(L)={score.toFixed(2)}
+            In Progress • P(L)={score?.toFixed(2)}
+          </span>
+        );
+      case 'needs_practice':
+        return (
+          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 border border-rose-300">
+            Needs Practice • P(L)={score?.toFixed(2)}
           </span>
         );
       default:
         return (
-          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 border border-rose-300">
-            Needs Practice • P(L)={score.toFixed(2)}
+          <span className="text-[10px] font-extrabold px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 border border-gray-300">
+            Not Assessed • No attempts yet
           </span>
         );
     }
@@ -209,23 +236,25 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
         return 'border-emerald-300 hover:border-emerald-400 bg-emerald-50/30';
       case 'in_progress':
         return 'border-amber-300 hover:border-amber-400 bg-amber-50/30';
-      default:
+      case 'needs_practice':
         return 'border-rose-200 hover:border-rose-300 bg-rose-50/30';
+      default:
+        return 'border-gray-200 hover:border-gray-300 bg-white';
     }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="course-flow-title">
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-5xl border border-[#d8d7e8] overflow-hidden flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="p-5 bg-[#7372A5] text-white flex items-center justify-between shrink-0">
           <div>
             <div className="flex items-center gap-2">
               <span className="material-symbols-outlined text-xl">account_tree</span>
-              <h3 className="font-extrabold text-lg">Course Flow & Prerequisite DAG</h3>
+              <h3 id="course-flow-title" className="font-extrabold text-lg">Course Flow & Prerequisite DAG</h3>
             </div>
             <p className="text-xs text-purple-100 mt-0.5">
-              Topologically sorted sequence & live BKT mastery scores (Requirement 6.a)
+              Explore topic dependencies, learning order, and your mastery.
             </p>
           </div>
 
@@ -287,29 +316,70 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                 </p>
               </div>
 
-              {error && <p className="text-xs text-red-500 font-semibold">{error}</p>}
+              {error && (
+                <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <span className="material-symbols-outlined text-rose-600 text-sm mt-0.5">error</span>
+                    <div className="space-y-1">
+                      <p className="text-xs font-bold text-rose-800">Extraction Unsuccessful</p>
+                      <p className="text-xs text-rose-700 leading-relaxed">{error}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
-              <button
-                onClick={handleGenerate}
-                disabled={!selectedFile || loading}
-                className="w-full py-3.5 rounded-2xl bg-[#7372A5] hover:bg-[#585785] text-white font-extrabold text-sm shadow-md disabled:opacity-50 transition-all flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <span>Extracting Concepts & Prerequisites...</span>
-                ) : (
-                  <>
-                    <span className="material-symbols-outlined text-sm">hub</span>
-                    <span>Generate Course Prerequisite DAG</span>
-                  </>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleGenerate}
+                  disabled={!selectedFile || loading}
+                  className="flex-1 py-3.5 rounded-2xl bg-[#7372A5] hover:bg-[#585785] text-white font-extrabold text-sm shadow-md disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <span>Extracting Concepts & Prerequisites...</span>
+                  ) : error ? (
+                    <>
+                      <span className="material-symbols-outlined text-sm">refresh</span>
+                      <span>Retry Concept Extraction</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">hub</span>
+                      <span>Generate Course Prerequisite DAG</span>
+                    </>
+                  )}
+                </button>
+                {selectedFile && !loading && (
+                  <button
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setError('');
+                    }}
+                    className="px-4 py-3.5 rounded-2xl border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 font-bold text-xs"
+                    title="Clear selected file"
+                  >
+                    Clear
+                  </button>
                 )}
-              </button>
+              </div>
             </div>
           )}
 
           {concepts && concepts.length === 0 && (
-            <p className="text-xs text-gray-500">
-              No concepts could be extracted from this file.
-            </p>
+            <div className="p-8 text-center space-y-3">
+              <span className="material-symbols-outlined text-3xl text-gray-400">info</span>
+              <p className="text-xs text-gray-500">
+                No distinct concepts could be extracted from this file.
+              </p>
+              <button
+                onClick={() => {
+                  setConcepts(null);
+                  setSelectedFile(null);
+                }}
+                className="text-xs font-bold text-[#7372A5] hover:underline"
+              >
+                Upload a different document
+              </button>
+            </div>
           )}
 
           {/* DAG Map View */}
@@ -319,6 +389,10 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
               <div className="flex items-center justify-between flex-wrap gap-2 p-3 rounded-2xl bg-[#f8f8fc] border border-[#e8e8f2] text-xs">
                 <div className="flex items-center gap-3 flex-wrap">
                   <span className="font-bold text-[#222138]">Mastery Legend:</span>
+                  <span className="flex items-center gap-1.5 font-semibold text-gray-600">
+                    <span className="w-2.5 h-2.5 rounded-full bg-gray-400"></span>
+                    Not Assessed (No attempts)
+                  </span>
                   <span className="flex items-center gap-1.5 font-semibold text-rose-700">
                     <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
                     Needs Practice (&lt;40%)
@@ -357,7 +431,16 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                     {tier0.map((c) => (
                       <div
                         key={c.label}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select foundation concept ${c.label}`}
                         onClick={() => setActiveConcept(c)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setActiveConcept(c);
+                          }
+                        }}
                         className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer ${getNodeBorder(
                           c.masteryStatus,
                           activeConcept?.label === c.label
@@ -401,7 +484,16 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                     {tier1.map((c) => (
                       <div
                         key={c.label}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select core principle ${c.label}`}
                         onClick={() => setActiveConcept(c)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setActiveConcept(c);
+                          }
+                        }}
                         className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer ${getNodeBorder(
                           c.masteryStatus,
                           activeConcept?.label === c.label
@@ -457,7 +549,16 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                     {tier2.map((c) => (
                       <div
                         key={c.label}
+                        role="button"
+                        tabIndex={0}
+                        aria-label={`Select advanced application ${c.label}`}
                         onClick={() => setActiveConcept(c)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setActiveConcept(c);
+                          }
+                        }}
                         className={`p-3.5 rounded-2xl border-2 transition-all cursor-pointer ${getNodeBorder(
                           c.masteryStatus,
                           activeConcept?.label === c.label
@@ -514,21 +615,51 @@ export const CourseFlowMapModal: React.FC<CourseFlowMapModalProps> = ({
                     </button>
                   </div>
                   <p className="text-gray-700 leading-relaxed">{activeConcept.description}</p>
-                  <div className="flex items-center gap-4 text-[11px] text-gray-500 pt-1">
-                    <span>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] text-gray-600 pt-1">
+                    <div>
                       <strong className="text-gray-700">Topic:</strong> {activeConcept.topic}
-                    </span>
+                    </div>
                     {activeConcept.subtopic && (
-                      <span>
+                      <div>
                         <strong className="text-gray-700">Subtopic:</strong> {activeConcept.subtopic}
-                      </span>
+                      </div>
                     )}
-                    <span>
+                    <div className="sm:col-span-2">
                       <strong className="text-gray-700">Prerequisites:</strong>{' '}
                       {activeConcept.prerequisites.length > 0
                         ? activeConcept.prerequisites.join(', ')
-                        : 'None (Root concept)'}
-                    </span>
+                        : 'None (Foundational concept)'}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-purple-200/80 flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-1.5 text-purple-900 font-semibold text-[11px]">
+                      <span className="material-symbols-outlined text-sm text-[#7372A5]">tips_and_updates</span>
+                      <span>
+                        <strong>Action:</strong>{' '}
+                        {activeConcept.masteryStatus === 'not_assessed'
+                          ? 'Take a diagnostic or practice quiz to establish baseline mastery.'
+                          : activeConcept.masteryStatus === 'needs_practice'
+                          ? 'Priority review recommended. Target this weak topic to reinforce foundations.'
+                          : activeConcept.masteryStatus === 'in_progress'
+                          ? 'Consolidate understanding with targeted practice questions.'
+                          : 'Solid mastery achieved! Keep sharp with periodic spaced reviews.'}
+                      </span>
+                    </div>
+
+                    {onPracticeTopic && (
+                      <button
+                        onClick={() => {
+                          onPracticeTopic(activeConcept.topic || activeConcept.label);
+                          onClose();
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-[#7372A5] hover:bg-[#585785] text-white font-bold text-xs shadow-xs transition-all flex items-center gap-1"
+                      >
+                        <span className="material-symbols-outlined text-xs">quiz</span>
+                        <span>Practise Topic</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

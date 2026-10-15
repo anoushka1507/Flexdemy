@@ -687,5 +687,213 @@ class TestGroundedTutorAndVoiceSupport(unittest.TestCase):
             loop.close()
 
 
+class TestPPTXAndConceptExtractionAcceptance(unittest.TestCase):
+    """P0 Acceptance: PPTX extraction, group shape traversal, notes, format validation, and caching."""
+
+    def test_pptx_deck_extraction_with_notes_and_shapes(self):
+        from pptx import Presentation
+        from AI_Layer.ai_core import extract_slide_deck
+
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        slide.shapes.title.text = "Lecture 1: Memory Management"
+        slide.placeholders[1].text = "Core concepts of paging and segmentation."
+        notes_slide = slide.notes_slide
+        notes_slide.notes_text_frame.text = "Speaker note: Paging prevents external fragmentation."
+
+        buf = io.BytesIO()
+        prs.save(buf)
+        pptx_bytes = buf.getvalue()
+
+        loop = asyncio.new_event_loop()
+        try:
+            chunks = loop.run_until_complete(extract_slide_deck(pptx_bytes, source_filename="Lec 1-21.pptx"))
+            self.assertGreaterEqual(len(chunks), 1)
+            chunk_text = chunks[0].text
+            self.assertIn("Lecture 1: Memory Management", chunk_text)
+            self.assertIn("paging and segmentation", chunk_text)
+            self.assertIn("Paging prevents external fragmentation", chunk_text)
+            self.assertEqual(chunks[0].locator, "Slide 1")
+        finally:
+            loop.close()
+
+    def test_legacy_ppt_rejection_with_helpful_guidance(self):
+        from backend.main import read_uploaded_material
+        loop = asyncio.new_event_loop()
+        try:
+            legacy_file = UploadFile(filename="Lec_old.ppt", file=io.BytesIO(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"))
+            with self.assertRaises(HTTPException) as cm:
+                loop.run_until_complete(read_uploaded_material(legacy_file))
+            self.assertEqual(cm.exception.status_code, 415)
+            self.assertIn(".pptx", cm.exception.detail)
+        finally:
+            loop.close()
+
+    def test_extract_concepts_cache_hit_returns_zero_llm_cost(self):
+        from backend.main import extract_concepts_api, material_concepts_cache
+        from AI_Layer.models import ConceptDraft
+        from pptx import Presentation
+
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        slide.shapes.title.text = "Cached Topic"
+        buf = io.BytesIO()
+        prs.save(buf)
+        pptx_bytes = buf.getvalue()
+
+        from AI_Layer.ai_core import extract_slide_deck
+        loop = asyncio.new_event_loop()
+        try:
+            import hashlib
+            content_hash = hashlib.sha256(pptx_bytes).hexdigest()
+            material_concepts_cache[content_hash] = [
+                ConceptDraft(
+                    label="Virtual Memory",
+                    description="Decouples virtual from physical address space.",
+                    topic="Operating Systems",
+                    subtopic="Memory",
+                    prerequisites=[],
+                    source_chunk_index=0,
+                )
+            ]
+            upload_file = UploadFile(filename="cached.pptx", file=io.BytesIO(pptx_bytes))
+            result = loop.run_until_complete(extract_concepts_api(upload_file))
+            self.assertTrue(result.get("cached"))
+            self.assertEqual(len(result.get("concepts", [])), 1)
+            self.assertEqual(result["concepts"][0]["label"], "Virtual Memory")
+        finally:
+            loop.close()
+
+
+
+class TestLearnerProfileAndPreferences(unittest.TestCase):
+    """P0 Acceptance: Persistent profiles, preferences, and idempotent quiz records."""
+
+    def test_record_quiz_result_idempotency_mock(self):
+        from unittest.mock import MagicMock
+        from backend.supabase_client import record_quiz_result
+
+        mock_client = MagicMock()
+        mock_table = MagicMock()
+        mock_client.table.return_value = mock_table
+        mock_table.upsert.return_value.execute.return_value = MagicMock(data=[{}])
+
+        loop = asyncio.new_event_loop()
+        try:
+            # First call
+            ok1 = loop.run_until_complete(
+                record_quiz_result(
+                    mock_client,
+                    user_id="user-123",
+                    quiz_id="quiz-abc",
+                    quiz_title="Test Quiz",
+                    topic="Algorithms",
+                    difficulty="Medium",
+                    score_percentage=80.0,
+                    total_questions=5,
+                    correct_answers_count=4,
+                )
+            )
+            self.assertTrue(ok1)
+            mock_table.upsert.assert_called_once()
+
+            # Second duplicate call with same quiz_id should upsert idempotently
+            mock_table.upsert.reset_mock()
+            ok2 = loop.run_until_complete(
+                record_quiz_result(
+                    mock_client,
+                    user_id="user-123",
+                    quiz_id="quiz-abc",
+                    quiz_title="Test Quiz",
+                    topic="Algorithms",
+                    difficulty="Medium",
+                    score_percentage=80.0,
+                    total_questions=5,
+                    correct_answers_count=4,
+                )
+            )
+            self.assertTrue(ok2)
+            mock_table.upsert.assert_called_once()
+        finally:
+            loop.close()
+
+    def test_guest_mode_does_not_persist_or_overwrite(self):
+        from backend.supabase_client import record_quiz_result
+        loop = asyncio.new_event_loop()
+        try:
+            # None client or user_id represents a guest user
+            ok = loop.run_until_complete(
+                record_quiz_result(
+                    None,
+                    user_id=None,
+                    quiz_id="guest-quiz-1",
+                    quiz_title="Guest Quiz",
+                    topic="General",
+                    difficulty="Medium",
+                    score_percentage=100.0,
+                    total_questions=3,
+                    correct_answers_count=3,
+                )
+            )
+            # Must return False for server persistence, leaving guest progress ephemeral
+            self.assertFalse(ok)
+        finally:
+            loop.close()
+
+
+class TestWeakTopicRevisionEndpoint(unittest.TestCase):
+    """P1 Acceptance: Weak topic revision (flashcards, notes, audio brief, languages)."""
+
+    def test_weak_topic_revision_english_and_hindi(self):
+        from backend.main import weak_topics_revision_api, WeakTopicRevisionRequest
+        loop = asyncio.new_event_loop()
+        try:
+            # 1. English Revision
+            req_en = WeakTopicRevisionRequest(topic="Cache Invalidation", language="english")
+            res_en = loop.run_until_complete(weak_topics_revision_api(req_en))
+            self.assertEqual(res_en["topic"], "Cache Invalidation")
+            self.assertEqual(res_en["language"], "english")
+            self.assertGreaterEqual(len(res_en["flashcards"]), 2)
+            self.assertGreaterEqual(len(res_en["revision_notes"]), 3)
+            self.assertIn("Cache Invalidation", res_en["audio_brief"])
+            self.assertIn("flashcards", res_en["audio_brief"].lower())
+
+            # 2. Hindi/Hinglish Revision
+            req_hi = WeakTopicRevisionRequest(topic="Cache Invalidation", language="hindi")
+            res_hi = loop.run_until_complete(weak_topics_revision_api(req_hi))
+            self.assertEqual(res_hi["topic"], "Cache Invalidation")
+            self.assertEqual(res_hi["language"], "hindi")
+            self.assertIn("Namaste", res_hi["audio_brief"])
+            self.assertIn("Cache Invalidation", res_hi["audio_brief"])
+        finally:
+            loop.close()
+
+
+class TestStudyScheduleBudgetAndHeuristic(unittest.TestCase):
+    """P1 Acceptance: Study schedule time budget constraint, reason labels, and heuristic note."""
+
+    def test_daily_time_budget_exact_enforcement(self):
+        from backend.main import study_schedule_api, StudyScheduleRequest
+        loop = asyncio.new_event_loop()
+        try:
+            for budget in (30, 45, 60, 90):
+                req = StudyScheduleRequest(days_until_exam=5, daily_minutes=budget)
+                res = loop.run_until_complete(study_schedule_api(req))
+                self.assertEqual(res["daily_minutes"], budget)
+                self.assertIn("policy_note", res)
+                self.assertIn("heuristic", res["policy_note"].lower())
+
+                for day_plan in res["schedule"]:
+                    total_task_minutes = sum(task["minutes"] for task in day_plan["tasks"])
+                    # The allocated task minutes must NEVER exceed the user's daily budget
+                    self.assertEqual(total_task_minutes, budget)
+                    for task in day_plan["tasks"]:
+                        self.assertTrue(task["id"])
+                        self.assertTrue(task["reason"])
+        finally:
+            loop.close()
+
+
 if __name__ == "__main__":
     unittest.main()
+

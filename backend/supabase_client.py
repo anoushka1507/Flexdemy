@@ -518,29 +518,41 @@ async def record_quiz_result(
     correct_answers_count: int,
     session_id: str | None = None,
     topic_breakdown: list | None = None,
-) -> None:
+    question_outcomes: list | None = None,
+) -> bool:
 
     if client is None or user_id is None:
-        return
+        return False
+
+    payload = {
+        "user_id": user_id,
+        "quiz_id": quiz_id,
+        "quiz_title": quiz_title,
+        "topic": topic,
+        "difficulty": difficulty,
+        "score_percentage": score_percentage,
+        "total_questions": total_questions,
+        "correct_answers_count": correct_answers_count,
+        "session_id": session_id,
+        "topic_breakdown": topic_breakdown,
+        "question_outcomes": question_outcomes,
+    }
 
     try:
-        client.table("quiz_history").insert(
-            {
-                "user_id": user_id,
-                "quiz_id": quiz_id,
-                "quiz_title": quiz_title,
-                "topic": topic,
-                "difficulty": difficulty,
-                "score_percentage": score_percentage,
-                "total_questions": total_questions,
-                "correct_answers_count": correct_answers_count,
-                "session_id": session_id,
-                "topic_breakdown": topic_breakdown,
-            }
+        # Idempotent upsert on (user_id, quiz_id) prevents double-counting answers
+        client.table("quiz_history").upsert(
+            payload,
+            on_conflict="user_id,quiz_id",
         ).execute()
-
+        return True
     except Exception as e:
-        logger.warning("record_quiz_result failed: %s", e)
+        logger.warning("record_quiz_result upsert failed: %s; attempting standard insert", e)
+        try:
+            client.table("quiz_history").insert(payload).execute()
+            return True
+        except Exception as e2:
+            logger.error("record_quiz_result insert failed: %s", e2)
+            return False
 
 
 async def fetch_quiz_history(client: Client | None) -> list[dict]:
@@ -558,3 +570,80 @@ async def fetch_quiz_history(client: Client | None) -> list[dict]:
     except Exception as e:
         logger.warning("fetch_quiz_history failed: %s", e)
         return []
+
+
+# ============================================================
+# PERSISTENT USER PREFERENCES & STUDY SCHEDULES
+# ============================================================
+
+async def fetch_user_preferences(
+    client: Client | None,
+    user_id: str | None,
+) -> dict | None:
+    if client is None or user_id is None:
+        return None
+
+    try:
+        result = client.table("user_preferences").select("*").eq("user_id", user_id).limit(1).execute()
+        rows = result.data or []
+        if rows:
+            return rows[0]
+        return None
+    except Exception as e:
+        logger.warning("fetch_user_preferences failed: %s", e)
+        return None
+
+
+async def save_user_preferences(
+    client: Client | None,
+    user_id: str | None,
+    preferences: dict,
+) -> bool:
+    if client is None or user_id is None:
+        return False
+
+    try:
+        payload = {
+            "user_id": user_id,
+            **preferences,
+            "updated_at": "now()",
+        }
+        client.table("user_preferences").upsert(
+            payload,
+            on_conflict="user_id",
+        ).execute()
+        return True
+    except Exception as e:
+        logger.warning("save_user_preferences failed: %s", e)
+        return False
+
+
+async def update_task_status(
+    client: Client | None,
+    user_id: str | None,
+    task_id: str,
+    status: str,
+) -> bool:
+    if client is None or user_id is None:
+        return False
+
+    try:
+        current_prefs = await fetch_user_preferences(client, user_id) or {}
+        completed_tasks = current_prefs.get("completed_tasks") or []
+        if isinstance(completed_tasks, list):
+            completed_set = set(completed_tasks)
+        else:
+            completed_set = set()
+
+        if status == "completed":
+            completed_set.add(task_id)
+        elif status in ("uncompleted", "postponed"):
+            completed_set.discard(task_id)
+
+        return await save_user_preferences(client, user_id, {
+            "completed_tasks": list(completed_set),
+        })
+    except Exception as e:
+        logger.warning("update_task_status failed: %s", e)
+        return False
+

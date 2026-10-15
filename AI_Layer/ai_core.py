@@ -465,65 +465,83 @@ async def extract_slide_deck(
     from pptx import Presentation
     from pptx.enum.shapes import MSO_SHAPE_TYPE
 
-    prs = Presentation(io.BytesIO(pptx_bytes))
+    try:
+        prs = Presentation(io.BytesIO(pptx_bytes))
+    except Exception as e:
+        logger.error("Failed to parse presentation '%s': %s", source_filename, e)
+        raise PDFProcessingError(
+            f"Could not open presentation '{source_filename}': file may be corrupted or in an unsupported format. Please upload a valid .pptx deck."
+        )
 
     chunks = []
-
     images_captioned = 0
 
-    for slide_number, slide in enumerate(prs.slides, 1):
+    def extract_text_from_shape(shape) -> list[str]:
+        nonlocal images_captioned
+        extracted: list[str] = []
+        try:
+            # Handle group shapes recursively
+            if getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.GROUP:
+                for sub in getattr(shape, "shapes", []):
+                    extracted.extend(extract_text_from_shape(sub))
+                return extracted
 
+            if getattr(shape, "has_text_frame", False) and shape.text_frame and shape.text_frame.text.strip():
+                extracted.append(shape.text_frame.text.strip())
+
+            if getattr(shape, "has_table", False) and shape.table:
+                for row in shape.table.rows:
+                    cells = [c.text.strip() for c in row.cells if c.text.strip()]
+                    if cells:
+                        extracted.append(" | ".join(cells))
+        except Exception as e:
+            logger.debug("Failed to extract shape text on %s: %s", source_filename, e)
+
+        return extracted
+
+    for slide_number, slide in enumerate(prs.slides, 1):
         texts = []
 
-        for shape in slide.shapes:
+        try:
+            for shape in slide.shapes:
+                texts.extend(extract_text_from_shape(shape))
 
-            if shape.has_text_frame and shape.text_frame.text.strip():
-                texts.append(shape.text_frame.text.strip())
-
-            if shape.has_table:
-                for row in shape.table.rows:
-                    texts.append(
-                        " | ".join(
-                            cell.text.strip()
-                            for cell in row.cells
+                # Describe embedded images if enabled and under quota
+                if (
+                    getattr(shape, "shape_type", None) == MSO_SHAPE_TYPE.PICTURE
+                    and images_captioned < MAX_CAPTIONED_IMAGES_PER_UPLOAD
+                    and client is not None
+                ):
+                    try:
+                        image = shape.image
+                        caption = await caption_image(
+                            image.blob,
+                            mime_type=image.content_type or "image/png",
                         )
-                    )
+                        images_captioned += 1
+                        if caption:
+                            texts.append(f"[Figure on slide {slide_number}: {caption}]")
+                    except Exception as e:
+                        logger.warning("slide image captioning failed: %s", e)
+        except Exception as e:
+            logger.warning("Error reading slide %d in '%s': %s", slide_number, source_filename, e)
 
-            # Describe embedded images/diagrams/figures so their
-            # content is searchable and citable, not invisible to
-            # ingestion. Capped globally per upload.
-            if (
-                shape.shape_type == MSO_SHAPE_TYPE.PICTURE
-                and images_captioned < MAX_CAPTIONED_IMAGES_PER_UPLOAD
-            ):
-
-                try:
-                    image = shape.image
-                    caption = await caption_image(
-                        image.blob,
-                        mime_type=image.content_type or "image/png",
-                    )
-                except Exception as e:
-                    logger.warning(
-                        "slide image captioning failed: %s", e
-                    )
-                    caption = ""
-
-                images_captioned += 1
-
-                if caption:
-                    texts.append(
-                        f"[Figure on slide {slide_number}: {caption}]"
-                    )
+        # Speaker notes (often containing key lecture concepts)
+        try:
+            if getattr(slide, "has_notes_slide", False) and slide.notes_slide:
+                notes_tf = slide.notes_slide.notes_text_frame
+                if notes_tf and notes_tf.text.strip():
+                    texts.append(f"[Speaker Notes: {notes_tf.text.strip()}]")
+        except Exception as e:
+            logger.debug("Error reading speaker notes for slide %d: %s", slide_number, e)
 
         slide_text = "\n".join(texts).strip()
-
         if not slide_text:
             continue
 
         chunks.append(
             Chunk(
-                chunk_index=slide_number - 1,
+                chunk_index=len(chunks),
                 text=slide_text,
                 approx_page_range=str(slide_number),
                 source_type="slide",
@@ -531,6 +549,9 @@ async def extract_slide_deck(
                 source_filename=source_filename,
             )
         )
+
+    if not chunks:
+        logger.warning("No text extracted from slide deck '%s'", source_filename)
 
     return chunks
 

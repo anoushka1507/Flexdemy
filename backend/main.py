@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 
 from pydantic import BaseModel
 
-from typing import Literal
+from typing import Literal, Any
 
 logger = logging.getLogger("flexdemy.api")
 
@@ -72,6 +72,7 @@ from backend.supabase_client import (
     fetch_asked_question_texts,
     fetch_mastery,
     fetch_quiz_history,
+    fetch_user_preferences,
     get_user_client,
     get_user_id,
     load_cached_material,
@@ -82,6 +83,8 @@ from backend.supabase_client import (
     save_cached_material,
     save_quiz_material_data,
     save_quiz_session_data,
+    save_user_preferences,
+    update_task_status,
     upsert_mastery,
 )
 
@@ -138,6 +141,11 @@ concept_extraction_cache: dict[
 material_chunks_cache: dict[
     str,
     tuple[str, list[Chunk]],
+] = {}
+
+material_concepts_cache: dict[
+    str,
+    list[Any],
 ] = {}
 
 # Session-level concurrency locks to prevent race conditions during answer submission
@@ -669,6 +677,15 @@ async def read_uploaded_material(
         )
     )
 
+    if filename.endswith(".ppt") and not filename.endswith(".pptx"):
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Legacy PowerPoint format '{raw_filename}' (.ppt) is not supported. "
+                "Please save your presentation as modern PowerPoint (.pptx) or export to PDF before uploading."
+            ),
+        )
+
     if not is_supported_ext and not is_supported_mime:
         raise HTTPException(
             status_code=415,
@@ -855,25 +872,110 @@ async def extract_concepts_api(
     from AI_Layer.ai_core import (
         extract_concepts,
     )
+    from AI_Layer.exceptions import ConceptExtractionError, PDFProcessingError
+    from AI_Layer.models import ConceptDraft
 
+    # 1. Ingestion & Validation
+    try:
+        chunks = await read_uploaded_material(
+            file,
+            user_id=user_id,
+            sb_client=sb_client,
+        )
+    except HTTPException:
+        raise
+    except PDFProcessingError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error("Failed to read uploaded material '%s': %s", file.filename, e, exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not read uploaded file '{file.filename}': {str(e)}",
+        )
 
-    chunks = await read_uploaded_material(
-        file,
-        user_id=user_id,
-        sb_client=sb_client,
-    )
+    if not chunks:
+        raise HTTPException(
+            status_code=422,
+            detail=f"No readable text or slide content could be extracted from '{file.filename}'. Please check that the file is not empty or image-only without OCR.",
+        )
 
+    # 2. Content Hash Cache Lookup (Instant response + 0 LLM tokens on re-extraction)
+    content_hash = chunks[0].content_hash if (chunks and chunks[0].content_hash) else None
+    if content_hash:
+        # Check in-memory concepts cache
+        if content_hash in material_concepts_cache:
+            cached_concepts = material_concepts_cache[content_hash]
+            return {
+                "filename": file.filename,
+                "chunk_count": len(chunks),
+                "cached": True,
+                "concepts": [c.model_dump() for c in cached_concepts],
+            }
 
-    concepts = await extract_concepts(
-        chunks
-    )
+        # Check durable Supabase cache
+        cached_durable = await load_cached_material(content_hash, user_id=user_id, auth_client=sb_client)
+        if cached_durable and cached_durable.get("concept_drafts"):
+            try:
+                loaded_drafts = [ConceptDraft.model_validate(cd) for cd in cached_durable["concept_drafts"]]
+                material_concepts_cache[content_hash] = loaded_drafts
+                return {
+                    "filename": file.filename,
+                    "chunk_count": len(chunks),
+                    "cached": True,
+                    "concepts": [c.model_dump() for c in loaded_drafts],
+                }
+            except Exception as e:
+                logger.warning("Failed to parse durable cached concepts: %s", e)
 
+    # 3. Call Concept Extraction with safe diagnostic error codes
+    try:
+        concepts = await extract_concepts(chunks)
+    except ConceptExtractionError as e:
+        err_msg = str(e)
+        if "GEMINI_API_KEY" in err_msg or "not initialized" in err_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Concept extraction requires a configured Gemini API key (GEMINI_API_KEY). Please configure GEMINI_API_KEY in your deployment environment.",
+            )
+        if "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg or "quota" in err_msg.lower():
+            raise HTTPException(
+                status_code=429,
+                detail="Gemini API rate limit exceeded. Please wait a moment and retry.",
+            )
+        raise HTTPException(
+            status_code=502,
+            detail=f"Concept extraction provider error: {err_msg}",
+        )
+    except Exception as e:
+        logger.error("extract_concepts failed on '%s': %s", file.filename, e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not extract educational concepts from this document: {str(e)}",
+        )
+
+    if not concepts:
+        raise HTTPException(
+            status_code=422,
+            detail="No distinct educational concepts could be identified in this file. Please verify that the file contains structured educational material.",
+        )
+
+    # 4. Save to in-memory & durable cache
+    if content_hash:
+        material_concepts_cache[content_hash] = concepts
+        await save_cached_material(
+            content_hash=content_hash,
+            chunks_json=[c.model_dump(mode="json") for c in chunks],
+            concept_drafts_json=[c.model_dump(mode="json") for c in concepts],
+            content_type=file.content_type or "application/octet-stream",
+            filename=file.filename or "material",
+            user_id=user_id,
+            auth_client=sb_client,
+        )
 
     return {
         "filename": file.filename,
-
         "chunk_count": len(chunks),
-
+        "cached": False,
         "concepts": [
             concept.model_dump()
             for concept in concepts
@@ -2084,6 +2186,7 @@ class QuizHistoryEntry(BaseModel):
     correct_answers_count: int
     session_id: str | None = None
     topic_breakdown: list[TopicBreakdownEntry] | None = None
+    question_outcomes: list[dict] | None = None
 
 
 @app.post("/record-quiz-result")
@@ -2095,7 +2198,7 @@ async def record_quiz_result_api(
     sb_client = get_user_client(authorization)
     user_id = get_user_id(authorization)
 
-    await record_quiz_result(
+    success = await record_quiz_result(
         sb_client,
         user_id,
         request.quiz_id,
@@ -2111,9 +2214,10 @@ async def record_quiz_result_api(
             if request.topic_breakdown
             else None
         ),
+        question_outcomes=request.question_outcomes,
     )
 
-    return {"recorded": sb_client is not None and user_id is not None}
+    return {"recorded": success}
 
 
 @app.get("/quiz-history")
@@ -2132,6 +2236,300 @@ async def quiz_history_api(
     history = await fetch_quiz_history(sb_client)
 
     return {"history": history}
+
+
+# ============================================================
+# PERSISTENT LEARNER PROFILES & PREFERENCES
+# ============================================================
+
+class UserPreferencesPayload(BaseModel):
+    language: str | None = None
+    explanation_style: str | None = None
+    dyslexia_mode: bool | None = None
+    exam_date: str | None = None
+    daily_minutes: int | None = None
+    saved_schedule: dict | None = None
+    completed_tasks: list[str] | None = None
+
+
+@app.get("/user-preferences")
+async def get_user_preferences_api(
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id or not sb_client:
+        return {"preferences": None}
+
+    prefs = await fetch_user_preferences(sb_client, user_id)
+    return {"preferences": prefs}
+
+
+@app.post("/user-preferences")
+async def save_user_preferences_api(
+    payload: UserPreferencesPayload,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id or not sb_client:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to save your learning preferences.",
+        )
+
+    data = {k: v for k, v in payload.model_dump().items() if v is not None}
+    saved = await save_user_preferences(sb_client, user_id, data)
+    return {"saved": saved}
+
+
+@app.get("/learner-profile")
+async def get_learner_profile_api(
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id or not sb_client:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in to load your persistent learner profile.",
+        )
+
+    # 1. Fetch mastery
+    mastery_dict = await fetch_mastery(sb_client)
+
+    # 2. Fetch history
+    history = await fetch_quiz_history(sb_client)
+
+    # 3. Fetch preferences
+    prefs = await fetch_user_preferences(sb_client, user_id)
+
+    # Calculate aggregate stats
+    total_quizzes = len(history)
+    avg_score = round(sum(h.get("score_percentage", 0) for h in history) / total_quizzes, 1) if total_quizzes > 0 else 0
+    best_score = max((h.get("score_percentage", 0) for h in history), default=0)
+    total_q = sum(h.get("total_questions", 0) for h in history)
+    total_correct = sum(h.get("correct_answers_count", 0) for h in history)
+    accuracy = round((total_correct / total_q) * 100, 1) if total_q > 0 else 0
+
+    # Weak topics (<0.60 BKT mastery)
+    weak_topics = [
+        {"topic": topic, "mastery_score": info["mastery_score"], "times_seen": info.get("times_seen", 0)}
+        for topic, info in mastery_dict.items()
+        if info.get("mastery_score", 0.3) < 0.60
+    ]
+
+    return {
+        "user_id": user_id,
+        "stats": {
+            "total_quizzes": total_quizzes,
+            "average_score": avg_score,
+            "best_score": best_score,
+            "accuracy": accuracy,
+        },
+        "mastery": mastery_dict,
+        "weak_topics": weak_topics,
+        "history": history[:15],
+        "preferences": prefs,
+    }
+
+
+class TaskStatusRequest(BaseModel):
+    task_id: str
+    status: str  # 'completed' | 'uncompleted' | 'postponed'
+
+
+@app.post("/study-schedule/task-status")
+async def update_study_task_status_api(
+    request: TaskStatusRequest,
+    authorization: str | None = Header(None),
+):
+    sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
+    if not user_id or not sb_client:
+        return {"updated": False, "guest": True}
+
+    ok = await update_task_status(sb_client, user_id, request.task_id, request.status)
+    return {"updated": ok}
+
+
+# ============================================================
+# TARGETED WEAK-TOPIC REVISION (Flashcards, Notes, Audio Brief)
+# ============================================================
+
+class WeakTopicRevisionRequest(BaseModel):
+    topic: str
+    session_id: str | None = None
+    language: str = "english"  # 'english' | 'hindi'
+
+
+@app.post("/weak-topics-revision")
+async def weak_topics_revision_api(
+    request: WeakTopicRevisionRequest,
+    authorization: str | None = Header(None),
+):
+    from AI_Layer.ai_core import (
+        generate_flashcards,
+        retrieve_relevant_chunks,
+        client,
+        MODEL_TEXT,
+    )
+    from AI_Layer.models import Flashcard
+
+    topic = request.topic.strip()
+    language = request.language.lower()
+    is_hindi = language in ("hindi", "hi")
+
+    # 1. Resolve chunks & concepts from session
+    chunks = []
+    concepts = []
+    if request.session_id:
+        session = await get_session(request.session_id)
+        if session:
+            chunks = session.chunks or []
+            concepts = session.concepts or []
+        else:
+            persisted = await load_quiz_material_data(request.session_id)
+            if persisted:
+                chunks = persisted.get("chunks") or []
+
+    # Fallback to in-memory material chunks if session chunks empty
+    if not chunks and material_chunks_cache:
+        for _hash, (_fn, c_list) in material_chunks_cache.items():
+            if c_list:
+                chunks = c_list
+                break
+
+    # 2. Retrieve relevant excerpts for the weak topic
+    top_matches = await retrieve_relevant_chunks(chunks, None, topic, k=3) if chunks else []
+    source_locators = [c.locator for c, _score in top_matches if getattr(c, "locator", None)]
+    primary_locator = source_locators[0] if source_locators else "[Curriculum Core]"
+
+    # 3. Assemble Flashcards
+    flashcards: list[dict] = []
+    if chunks:
+        try:
+            fc_list = await generate_flashcards(topic, chunks, None, concepts=concepts, count=4)
+            flashcards = [f.model_dump() for f in fc_list]
+        except Exception as e:
+            logger.warning("generate_flashcards error in weak_topics_revision: %s", e)
+
+    if not flashcards:
+        # Fallback deterministic cards
+        if is_hindi:
+            flashcards = [
+                {
+                    "front": f"{topic}: Mukhya Siddhant Kya Hai?",
+                    "back": f"{topic} ek mahatvapurna concept hai. Isko samajhne ke liye core definitions aur example applications ko dhyan se revise karein.",
+                    "source_locator": primary_locator,
+                },
+                {
+                    "front": f"{topic}: Common Mistakes se Kaise Bachein?",
+                    "back": "Prashna solve karte waqt jaldbazi na karein; formula/rule ke assumptions aur edge cases ko verify karein.",
+                    "source_locator": primary_locator,
+                },
+            ]
+        else:
+            flashcards = [
+                {
+                    "front": f"Core Principle: {topic}",
+                    "back": f"Fundamental conceptual foundation of {topic}. Focus on key definitions and identifying when to apply this technique.",
+                    "source_locator": primary_locator,
+                },
+                {
+                    "front": f"Common Trap in {topic}",
+                    "back": "Avoid confusing edge conditions with normal inputs. Validate prerequisites before applying final steps.",
+                    "source_locator": primary_locator,
+                },
+            ]
+
+    # 4. Assemble Structured Revision Notes
+    excerpts_text = " ".join([c.text[:250] for c, _s in top_matches]) if top_matches else f"Key concepts and definitions in {topic}."
+    
+    if is_hindi:
+        revision_notes = [
+            {
+                "title": f"1. Concept Overview: {topic}",
+                "key_points": [
+                    f"{topic} ki mukhya paribhasha aur uddeshya ko yaad rakhein.",
+                    f"Uploaded lecture material ke anusar ({primary_locator}), is concept ko problem solving mein istemal kiya jata hai.",
+                ],
+                "example": f"Jaise {topic} ke standard use case mein, pehle prerequisites check hote hain.",
+                "source_locator": primary_locator,
+            },
+            {
+                "title": "2. Common Misconceptions & Traps",
+                "key_points": [
+                    "Formula ko bina context ke blindly apply na karein.",
+                    "Negative outcomes aur boundary conditions par dhyan dein.",
+                ],
+                "example": "Question options mein common traps aksar sign errors ya unit mismatches hote hain.",
+                "source_locator": primary_locator,
+            },
+            {
+                "title": "3. Exam Quick Review Strategy",
+                "key_points": [
+                    "2-3 practice problems solve karke active recall test karein.",
+                    "Weak areas par targeted diagnostic quiz lein.",
+                ],
+                "example": "Is topic par 5 questions ka adaptive quiz launch karein.",
+                "source_locator": primary_locator,
+            },
+        ]
+        audio_brief = (
+            f"Namaste! Yeh {topic} ke liye aapka targeted revision audio brief hai. "
+            f"Aapke course material ({primary_locator}) ke mutabik, {topic} ek core foundation hai. "
+            f"Dhyan rakhein ki exams mein common misconceptions aksar superficial assumptions se aate hain. "
+            f"Excerpts mein bataya gaya hai: {excerpts_text[:160]}... "
+            f"Ab aap is topic par flashcards revise karein ya 5 questions ka practice quiz shuru karein."
+        )
+    else:
+        revision_notes = [
+            {
+                "title": f"1. Concept Foundations: {topic}",
+                "key_points": [
+                    f"Understand the fundamental definition and purpose of {topic}.",
+                    f"Grounded in your uploaded lecture notes ({primary_locator}).",
+                ],
+                "example": f"In typical applications of {topic}, establish baseline parameters before computing dependent terms.",
+                "source_locator": primary_locator,
+            },
+            {
+                "title": "2. Common Pitfalls & Traps to Avoid",
+                "key_points": [
+                    "Beware of boundary condition errors and unchecked assumptions.",
+                    "Distinguish between necessary and sufficient conditions.",
+                ],
+                "example": "Distractor options frequently test partial applications where one prerequisite was skipped.",
+                "source_locator": primary_locator,
+            },
+            {
+                "title": "3. High-Yield Practice Recommendation",
+                "key_points": [
+                    "Perform active recall using the flashcards below.",
+                    "Take a focused 5-question adaptive quiz to solidify your BKT mastery.",
+                ],
+                "example": "Aim for a P(L) mastery score above 0.75 to transition this topic from 'Needs Practice' to 'Mastered'.",
+                "source_locator": primary_locator,
+            },
+        ]
+        audio_brief = (
+            f"Welcome to your targeted revision brief for {topic}. "
+            f"Based on your course notes ({primary_locator}), {topic} requires careful attention to foundation principles. "
+            f"Key source excerpt: {excerpts_text[:180]}... "
+            f"Review the flashcards below and practice active recall before attempting your next adaptive quiz."
+        )
+
+    return {
+        "topic": topic,
+        "language": language,
+        "primary_locator": primary_locator,
+        "flashcards": flashcards,
+        "revision_notes": revision_notes,
+        "audio_brief": audio_brief,
+        "is_grounded": bool(top_matches),
+    }
+
 
 
 # ============================================================
@@ -2231,6 +2629,7 @@ class StudyScheduleRequest(BaseModel):
     days_until_exam: int = 7
     daily_minutes: int = 45
     session_id: str | None = None
+    exam_date: str | None = None
 
 
 @app.post("/study-schedule")
@@ -2241,6 +2640,7 @@ async def study_schedule_api(
     import math
 
     sb_client = get_user_client(authorization)
+    user_id = get_user_id(authorization)
     mastery_dict = await fetch_mastery(sb_client) if sb_client else {}
 
     topics = list(mastery_dict.keys())
@@ -2254,7 +2654,7 @@ async def study_schedule_api(
     if not topics:
         topics = ["Core Concepts", "Foundational Principles", "Problem Solving"]
 
-    days = max(1, min(request.days_until_exam, 30))
+    days = max(1, min(request.days_until_exam, 60))
     minutes = max(15, min(request.daily_minutes, 180))
 
     # Calculate projected Ebbinghaus retention: R(t) = exp(-t / S)
@@ -2264,37 +2664,106 @@ async def study_schedule_api(
         p_l = float(mastery_dict.get(t, {}).get("mastery_score", 0.35))
         stability = 1.0 + 9.0 * p_l
         retention_at_exam = math.exp(-days / stability)
+        urgency = 1.0 - retention_at_exam
+        
+        if p_l < 0.40:
+            reason = "Low mastery (<40%) • Urgent remediation required"
+        elif retention_at_exam < 0.60:
+            reason = "Review due • Significant forgetting curve decay projected"
+        elif p_l >= 0.75:
+            reason = "Mastered topic • Periodic spaced maintenance"
+        else:
+            reason = "In-progress concept • Consolidation & practice"
+
         topic_assessments.append({
             "topic": t,
             "mastery_p": round(p_l, 3),
             "projected_retention": round(retention_at_exam, 3),
-            "urgency": round(1.0 - retention_at_exam, 3),
+            "urgency": round(urgency, 3),
+            "reason": reason,
         })
 
+    # Prioritize lowest retention / highest urgency topics
     topic_assessments.sort(key=lambda x: x["urgency"], reverse=True)
+
+    # Fetch already completed tasks if user is authenticated
+    completed_set: set[str] = set()
+    if user_id and sb_client:
+        user_prefs = await fetch_user_preferences(sb_client, user_id) or {}
+        completed_set = set(user_prefs.get("completed_tasks") or [])
 
     daily_plan = []
     for day in range(1, days + 1):
-        day_topic = topic_assessments[(day - 1) % len(topic_assessments)]["topic"]
-        secondary_topic = topic_assessments[day % len(topic_assessments)]["topic"]
+        day_topic_info = topic_assessments[(day - 1) % len(topic_assessments)]
+        secondary_topic_info = topic_assessments[day % len(topic_assessments)]
+        day_topic = day_topic_info["topic"]
+        secondary_topic = secondary_topic_info["topic"]
 
         if day == days:
             stage = "Final Mock Exam & High-Yield Review"
+            m1 = int(minutes * 0.6)
+            m2 = minutes - m1
             tasks = [
-                {"type": "mock_exam", "title": "Full Comprehensive Mock Exam across all topics", "minutes": int(minutes * 0.6)},
-                {"type": "flashcards", "title": "Rapid flashcard review on weak spots", "minutes": int(minutes * 0.4)},
+                {
+                    "id": f"d{day}_t1_mock_exam",
+                    "type": "mock_exam",
+                    "title": "Full Comprehensive Mock Exam across all topics",
+                    "minutes": m1,
+                    "reason": "Final readiness evaluation before exam",
+                    "completed": f"d{day}_t1_mock_exam" in completed_set,
+                },
+                {
+                    "id": f"d{day}_t2_flashcards",
+                    "type": "flashcards",
+                    "title": "Rapid flashcard review on weak spots",
+                    "minutes": m2,
+                    "reason": "High-speed active recall anchor",
+                    "completed": f"d{day}_t2_flashcards" in completed_set,
+                },
             ]
         elif day % 2 == 1:
             stage = f"Deep Dive: {day_topic}"
+            m1 = int(minutes * 0.5)
+            m2 = minutes - m1
             tasks = [
-                {"type": "review", "title": f"Review cited lecture excerpts for {day_topic}", "minutes": int(minutes * 0.5)},
-                {"type": "adaptive_quiz", "title": f"Adaptive practice quiz on {day_topic}", "minutes": int(minutes * 0.5)},
+                {
+                    "id": f"d{day}_t1_review",
+                    "type": "review",
+                    "title": f"Review cited lecture excerpts for {day_topic}",
+                    "minutes": m1,
+                    "reason": day_topic_info["reason"],
+                    "completed": f"d{day}_t1_review" in completed_set,
+                },
+                {
+                    "id": f"d{day}_t2_quiz",
+                    "type": "adaptive_quiz",
+                    "title": f"Adaptive practice quiz on {day_topic}",
+                    "minutes": m2,
+                    "reason": "Calibrate and advance BKT mastery vector",
+                    "completed": f"d{day}_t2_quiz" in completed_set,
+                },
             ]
         else:
             stage = f"Spaced Reinforcement: {secondary_topic}"
+            m1 = int(minutes * 0.4)
+            m2 = minutes - m1
             tasks = [
-                {"type": "flashcards", "title": f"Active recall flashcards for {secondary_topic}", "minutes": int(minutes * 0.4)},
-                {"type": "tutor_chat", "title": f"Socratic grounded tutor chat on misconceptions in {day_topic}", "minutes": int(minutes * 0.6)},
+                {
+                    "id": f"d{day}_t1_flashcards",
+                    "type": "flashcards",
+                    "title": f"Active recall flashcards for {secondary_topic}",
+                    "minutes": m1,
+                    "reason": secondary_topic_info["reason"],
+                    "completed": f"d{day}_t1_flashcards" in completed_set,
+                },
+                {
+                    "id": f"d{day}_t2_tutor",
+                    "type": "tutor_chat",
+                    "title": f"Socratic grounded tutor chat on misconceptions in {day_topic}",
+                    "minutes": m2,
+                    "reason": "Resolve identified misconceptions via cited source material",
+                    "completed": f"d{day}_t2_tutor" in completed_set,
+                },
             ]
 
         daily_plan.append({
@@ -2307,13 +2776,29 @@ async def study_schedule_api(
 
     avg_retention = sum(t["projected_retention"] for t in topic_assessments) / len(topic_assessments)
 
-    return {
+    result_payload = {
         "days_until_exam": days,
         "daily_minutes": minutes,
         "projected_exam_retention": round(avg_retention, 2),
         "topics_analysis": topic_assessments,
         "schedule": daily_plan,
+        "policy_note": (
+            "Spaced repetition schedule is a deterministic heuristic based on Ebbinghaus "
+            "forgetting curve modeling R(t) = exp(-t/S), provided as a study planning aid "
+            "rather than an exact neurological prediction."
+        ),
     }
+
+    # Automatically persist schedule in user preferences if authenticated
+    if user_id and sb_client:
+        await save_user_preferences(sb_client, user_id, {
+            "saved_schedule": result_payload,
+            "daily_minutes": minutes,
+            "exam_date": request.exam_date,
+        })
+
+    return result_payload
+
 
 # ============================================================
 # LEGACY BATCH GENERATION

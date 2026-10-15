@@ -1,0 +1,46 @@
+{
+  "profile_1_new_learner": {
+    "profile": "New Learner (Cold Start)",
+    "attempts": 0,
+    "is_unassessed_distinguished": true,
+    "recommended_action": "Diagnostic Placement Calibration",
+    "diagnostic_triggered": true,
+    "status": "PASS"
+  },
+  "profile_2_repeated_errors": {
+    "profile": "Learner with Repeated Errors in 'Paging'",
+    "mastery_vector": {
+      "Paging": 0.22,
+      "Segmentation": 0.78,
+      "Virtual Memory": 0.74
+    },
+    "top_priority_topic": "Paging",
+    "targets_weak_topic": true,
+    "mastered_lower_priority": true,
+    "budget_fits": true,
+    "status": "PASS"
+  },
+  "profile_3_improving_prerequisite": {
+    "profile": "Improving Learner Mastering Prerequisite",
+    "initial_mastery": {
+      "Foundations": 0.28,
+      "Core Algorithms": 0.35
+    },
+    "final_mastery": {
+      "Foundations": 0.99,
+      "Core Algorithms": 0.35
+    },
+    "bkt_progression": [
+      0.28,
+      0.6909,
+      0.9231,
+      0.9846,
+      0.99
+    ],
+    "initial_top_priority": "Foundations",
+    "updated_top_priority": "Core Algorithms",
+    "priority_shifted_to_dependent": true,
+    "plan_fits_budget": true,
+    "status": "PASS"
+  }
+}

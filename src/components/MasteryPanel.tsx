@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { apiFetch } from '../utils/api';
+import { WeakTopicRevisionModal } from './WeakTopicRevisionModal';
 
 interface TopicMastery {
   mastery_score: number;
@@ -10,9 +11,13 @@ interface TopicMastery {
 
 interface MasteryPanelProps {
   onStartDiagnostic?: () => void;
+  onStartPracticeQuiz?: (topic: string) => void;
 }
 
-export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic }) => {
+export const MasteryPanel: React.FC<MasteryPanelProps> = ({
+  onStartDiagnostic,
+  onStartPracticeQuiz,
+}) => {
   const [mastery, setMastery] = useState<Record<string, TopicMastery> | null>(
     null
   );
@@ -23,6 +28,7 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
   const [dailyMinutes, setDailyMinutes] = useState(45);
   const [scheduleData, setScheduleData] = useState<any | null>(null);
   const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [revisionTopic, setRevisionTopic] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -50,6 +56,20 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
         if (mounted) {
           setMastery(data.topics || {});
           setIsNewStudent(Boolean(data.is_new_student));
+        }
+
+        // Hydrate saved schedule and preferences
+        const prefRes = await apiFetch('/api/user-preferences');
+        if (prefRes.ok) {
+          const prefData = await prefRes.json();
+          if (mounted && prefData.preferences) {
+            if (prefData.preferences.saved_schedule) {
+              setScheduleData(prefData.preferences.saved_schedule);
+            }
+            if (prefData.preferences.daily_minutes) {
+              setDailyMinutes(prefData.preferences.daily_minutes);
+            }
+          }
         }
       } catch (err) {
         if (mounted) {
@@ -91,6 +111,35 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
     }
   };
 
+  const handleToggleTask = async (taskId: string, currentCompleted: boolean) => {
+    const newStatus = currentCompleted ? 'uncompleted' : 'completed';
+    // Optimistic local update
+    setScheduleData((prev: any) => {
+      if (!prev || !prev.schedule) return prev;
+      return {
+        ...prev,
+        schedule: prev.schedule.map((dayPlan: any) => ({
+          ...dayPlan,
+          tasks: dayPlan.tasks.map((task: any) =>
+            task.id === taskId ? { ...task, completed: !currentCompleted } : task
+          ),
+        })),
+      };
+    });
+
+    try {
+      await apiFetch('/api/study-schedule/task-status', {
+        method: 'POST',
+        body: JSON.stringify({
+          task_id: taskId,
+          status: newStatus,
+        }),
+      });
+    } catch (err) {
+      console.error('Failed to update task status:', err);
+    }
+  };
+
   if (loading) {
     return (
       <div className="bg-white p-8 rounded-3xl border border-purple-100 shadow-xs">
@@ -117,7 +166,7 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
         {isNewStudent ? (
           <div className="space-y-3">
             <span className="text-[10px] font-bold px-2.5 py-1 rounded-full bg-purple-100 text-[#7372A5] uppercase tracking-wider">
-              Cold-Start Diagnostic Calibration (Req 4.b)
+              Diagnostic Placement Calibration
             </span>
             <h4 className="font-extrabold text-sm text-[#222138]">
               Calibrate Your Topic Mastery Vector
@@ -193,21 +242,34 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
                 : 'bg-emerald-500';
 
             return (
-              <div key={topic} className="space-y-1.5 p-3 rounded-2xl bg-[#f8f8fc] border border-[#e8e8f2]">
-                <div className="flex items-center justify-between text-xs flex-wrap gap-1">
+              <div key={topic} className="space-y-2 p-4 rounded-2xl bg-[#f8f8fc] border border-[#e8e8f2]">
+                <div className="flex items-center justify-between text-xs flex-wrap gap-2">
                   <div className="flex items-center gap-2">
                     <span className="font-bold text-[#222138]">{topic}</span>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${badge.color}`}>
                       {badge.label}
                     </span>
                   </div>
-                  <span className="font-semibold text-gray-600">
-                    P(L) = {info.mastery_score.toFixed(2)}{' '}
-                    <span className="text-gray-400 font-normal">
-                      ({info.times_seen} attempts)
+
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setRevisionTopic(topic)}
+                      className="px-2.5 py-1 rounded-xl bg-purple-100/80 hover:bg-purple-200 text-[#7372A5] font-bold text-[11px] transition-all flex items-center gap-1 shadow-2xs"
+                    >
+                      <span className="material-symbols-outlined text-xs">auto_stories</span>
+                      <span>Revise Topic</span>
+                    </button>
+
+                    <span className="font-semibold text-gray-600">
+                      P(L) = {info.mastery_score.toFixed(2)}{' '}
+                      <span className="text-gray-400 font-normal">
+                        ({info.times_seen} attempts)
+                      </span>
                     </span>
-                  </span>
+                  </div>
                 </div>
+
                 <div className="w-full bg-[#ececf4] h-2.5 rounded-full overflow-hidden">
                   <div
                     className={`h-full rounded-full transition-all ${barColor}`}
@@ -220,7 +282,7 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
         </div>
       </div>
 
-      {/* Spaced Repetition Exam Planner (Requirement 6.c) */}
+      {/* Spaced Repetition Exam Planner */}
       <div className="bg-white p-8 rounded-3xl border border-[#d8d7e8] shadow-xs space-y-6">
         <div className="flex items-center justify-between flex-wrap gap-2">
           <div>
@@ -323,27 +385,69 @@ export const MasteryPanel: React.FC<MasteryPanelProps> = ({ onStartDiagnostic })
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {item.tasks.map((task: any, idx: number) => (
-                      <div
-                        key={idx}
-                        className="p-2.5 rounded-xl bg-[#f8f8fc] border border-[#e8e8f2] text-xs flex items-start gap-2"
-                      >
-                        <span className="material-symbols-outlined text-sm text-[#7372A5] mt-0.5">
-                          {task.type === 'mock_exam' ? 'quiz' : task.type === 'flashcards' ? 'style' : 'menu_book'}
-                        </span>
-                        <div>
-                          <p className="font-semibold text-gray-800 leading-snug">{task.title}</p>
-                          <span className="text-[10px] text-gray-400 font-medium">{task.minutes} mins</span>
+                    {item.tasks.map((task: any, idx: number) => {
+                      const isDone = Boolean(task.completed);
+                      return (
+                        <div
+                          key={task.id || idx}
+                          onClick={() => handleToggleTask(task.id, isDone)}
+                          role="button"
+                          tabIndex={0}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              handleToggleTask(task.id, isDone);
+                            }
+                          }}
+                          className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 transition-all cursor-pointer ${
+                            isDone
+                              ? 'bg-emerald-50/70 border-emerald-300 line-through text-gray-400'
+                              : 'bg-[#f8f8fc] border-[#e8e8f2] text-gray-800 hover:border-[#7372A5]/40'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isDone}
+                            onChange={() => {}}
+                            className="mt-0.5 rounded text-[#7372A5] focus:ring-purple-400 cursor-pointer"
+                          />
+                          <div className="space-y-1 flex-1">
+                            <p className="font-semibold leading-snug">{task.title}</p>
+                            <div className="flex items-center justify-between text-[10px] text-gray-500 pt-0.5">
+                              <span>{task.minutes} mins</span>
+                              {task.reason && (
+                                <span className="font-semibold text-purple-700 bg-purple-50 px-1.5 py-0.5 rounded">
+                                  {task.reason}
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               ))}
             </div>
+
+            {scheduleData.policy_note && (
+              <p className="text-[10px] text-gray-400 italic pt-2">
+                {scheduleData.policy_note}
+              </p>
+            )}
           </div>
         )}
       </div>
+
+      {/* Weak-Topic Targeted Revision Modal */}
+      {revisionTopic && (
+        <WeakTopicRevisionModal
+          isOpen={Boolean(revisionTopic)}
+          topic={revisionTopic}
+          onClose={() => setRevisionTopic(null)}
+          onStartPracticeQuiz={onStartPracticeQuiz}
+        />
+      )}
     </div>
   );
 };

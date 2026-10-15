@@ -71,73 +71,15 @@ export default function App() {
   }, [dyslexiaMode]);
 
   // ==========================================================
-  // AUTH
+  // AUTH & PERSISTENT LEARNER PROFILE HYDRATION
   // ==========================================================
 
-  useEffect(() => {
-    let mounted = true;
-
-    const checkAuth = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!mounted) return;
-      setCurrentView(data.session ? 'dashboard' : 'login');
-      setAuthLoading(false);
-    };
-
-    checkAuth();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event) => {
-      if (!mounted) return;
-
-      if (event === 'SIGNED_IN') {
-        // Supabase re-validates the session (and re-fires this
-        // same event) whenever the tab regains focus/visibility —
-        // not just on an actual fresh sign-in. Only navigate away
-        // if the user was genuinely on the login screen; otherwise
-        // this would yank them out of an active quiz, a chat, or
-        // anywhere else just for switching windows and back.
-        setCurrentView((prev) => (prev === 'login' ? 'dashboard' : prev));
-      } else if (event === 'SIGNED_OUT') {
-        setCurrentView('login');
-      }
-    });
-
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  // ==========================================================
-  // QUIZ HISTORY (fetch once so the dashboard survives a refresh
-  // instead of resetting to empty — it was only ever held in React
-  // state before this, with nothing fetched back on load)
-  // ==========================================================
-
-  useEffect(() => {
-    let mounted = true;
-
-    const loadHistory = async () => {
-      try {
-        const response = await apiFetch('/api/quiz-history');
-
-        if (!response.ok) {
-          console.error(
-            'Quiz history fetch failed:',
-            response.status,
-            await response.text()
-          );
-          return;
-        }
-        if (!mounted) return;
-
+  const hydrateLearnerData = async () => {
+    try {
+      const response = await apiFetch('/api/learner-profile');
+      if (response.ok) {
         const data = await response.json();
         const rows: any[] = data.history || [];
-        console.log('Quiz history loaded:', rows.length, 'entries');
-        if (rows.length === 0) return;
-
         const results: QuizResult[] = rows.map((row) => ({
           quizId: row.quiz_id,
           quizTitle: row.quiz_title,
@@ -150,15 +92,8 @@ export default function App() {
           userAnswers: {},
           topicBreakdown: [],
         }));
-
         setQuizResults(results);
 
-        // Quizzes tab was never rehydrated from persisted history before
-        // this — it only ever held whatever was generated in the current
-        // browser session, so a completed quiz vanished from "Available
-        // Quizzes" the moment you refreshed. Rebuild cards for it here;
-        // these have no questions loaded (we don't persist those), so
-        // clicking one opens its past results instead of "starting" it.
         setQuizzesList(
           rows.map((row) => ({
             id: row.quiz_id,
@@ -183,35 +118,67 @@ export default function App() {
           }))
         );
 
-        const totalQuizzes = results.length;
-        const averageScore = Math.round(
-          results.reduce((sum, q) => sum + q.scorePercentage, 0) / totalQuizzes
-        );
-        const bestScore = Math.max(...results.map((q) => q.scorePercentage));
-        const totalQuestions = results.reduce((sum, q) => sum + q.totalQuestions, 0);
-        const totalCorrect = results.reduce((sum, q) => sum + q.correctAnswersCount, 0);
-        const accuracy =
-          totalQuestions > 0 ? Math.round((totalCorrect / totalQuestions) * 100) : 0;
+        if (data.stats) {
+          setUserProfile((profile) => ({
+            ...profile,
+            totalQuizzesAttempted: data.stats.total_quizzes,
+            averageScore: data.stats.average_score,
+            bestScore: data.stats.best_score,
+            accuracy: data.stats.accuracy,
+            overallProgress: data.stats.average_score,
+          }));
+        }
 
-        setUserProfile((profile) => ({
-          ...profile,
-          totalQuizzesAttempted: totalQuizzes,
-          averageScore,
-          bestScore,
-          accuracy,
-          overallProgress: averageScore,
-        }));
-      } catch {
-        // Best-effort — dashboard just stays empty if this fails.
+        if (data.preferences?.dyslexia_mode !== undefined) {
+          setDyslexiaMode(Boolean(data.preferences.dyslexia_mode));
+        }
       }
+    } catch (err) {
+      console.warn('Could not hydrate persistent learner data:', err);
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+
+    const checkAuth = async () => {
+      const { data } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (data.session) {
+        setCurrentView('dashboard');
+        hydrateLearnerData();
+      } else {
+        setCurrentView('login');
+      }
+      setAuthLoading(false);
     };
 
-    loadHistory();
+    checkAuth();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event) => {
+      if (!mounted) return;
+
+      if (event === 'SIGNED_IN') {
+        setCurrentView((prev) => (prev === 'login' ? 'dashboard' : prev));
+        hydrateLearnerData();
+      } else if (event === 'SIGNED_OUT') {
+        // Clear in-memory learner progress so User B never sees User A's un-reloaded history
+        setCurrentView('login');
+        setQuizResults([]);
+        setQuizzesList([]);
+        setRecentHistory([]);
+        setUserProfile(INITIAL_USER_PROFILE);
+      }
+    });
 
     return () => {
       mounted = false;
+      subscription.unsubscribe();
     };
   }, []);
+
 
   // ==========================================================
   // LOADING
@@ -603,7 +570,10 @@ export default function App() {
                 Analytics & Mastery Radar
               </h1>
 
-              <MasteryPanel onStartDiagnostic={() => setIsUploadModalOpen(true)} />
+              <MasteryPanel
+                onStartDiagnostic={() => setIsUploadModalOpen(true)}
+                onStartPracticeQuiz={() => setIsUploadModalOpen(true)}
+              />
 
             </div>
 
@@ -653,8 +623,9 @@ export default function App() {
       <CourseFlowMapModal
         isOpen={isCourseMapOpen}
         onClose={() => setIsCourseMapOpen(false)}
+        onPracticeTopic={() => setIsUploadModalOpen(true)}
       />
-
     </div>
   );
 }
+
