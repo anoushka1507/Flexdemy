@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* Tailwind v4 defaults `dark:` to the OS prefers-color-scheme media
+   query. This app's entire theme system (Light/Dark/System picker,
+   and Dyslexia Mode forcing light regardless of Dark Mode) is driven
+   by JS toggling the .dark class on <html> — without this, every
+   `dark:` utility class in the app ignores that entirely and just
+   follows the OS setting instead, which is why removing .dark for
+   Dyslexia Mode had no visible effect and why dark mode only ever
+   "worked" for users whose OS happened to already be dark. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --bg-app: #f6f6fa;
   --bg-surface: #ffffff;
