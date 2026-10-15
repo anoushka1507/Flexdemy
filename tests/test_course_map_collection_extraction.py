@@ -387,5 +387,105 @@ class TestCourseMapCollectionExtraction(unittest.TestCase):
         self.assertEqual(res.status_code, 403)
 
 
+    def test_practice_quiz_generation_from_persisted_collection(self):
+        """
+        Urgent Hotfix: Practice Quiz generation must retrieve persisted chunks
+        across separate requests and serverless cold starts using collection_id.
+        """
+        pdf_bytes = create_agile_numericals_pdf()
+        file_id = f"file_quiz_{uuid.uuid4().hex[:8]}"
+        filename = "Agile Numericals.pdf"
+
+        # 1. Upload chunk (synchronous ingestion for document)
+        res_upload = self.client.post(
+            "/upload-chunk",
+            data={
+                "file_id": file_id,
+                "chunk_index": 0,
+                "total_chunks": 1,
+                "filename": filename,
+                "file_size": len(pdf_bytes),
+            },
+            files={"chunk": ("chunk_0", io.BytesIO(pdf_bytes))},
+        )
+        self.assertEqual(res_upload.status_code, 200)
+        upload_data = res_upload.json()
+        collection_id = upload_data.get("collection_id")
+        self.assertIsNotNone(collection_id)
+
+        # 2. Simulate serverless instance separation / cold start
+        material_collections.clear()
+
+        # 3. Start adaptive quiz using only collection_id
+        from AI_Layer.models import QuestionDraft, OptionDraft
+        mock_question = QuestionDraft(
+            question_text="What is the average velocity given sprints of 45, 50, and 40 story points?",
+            question_type="mcq",
+            difficulty="medium",
+            options=[
+                OptionDraft(text="45 story points", is_correct=True),
+                OptionDraft(text="50 story points", is_correct=False),
+                OptionDraft(text="40 story points", is_correct=False),
+                OptionDraft(text="135 story points", is_correct=False),
+            ],
+        )
+
+        with patch("AI_Layer.ai_core.extract_concepts", new_callable=AsyncMock) as mock_extract, \
+             patch("backend.main.generate_next_question", new_callable=AsyncMock) as mock_gen_q:
+
+            mock_extract.return_value = self.mock_concepts
+            mock_gen_q.return_value = (self.mock_concepts[0], mock_question, 1)
+
+            res_quiz = self.client.post(
+                "/start-adaptive-quiz?difficulty=medium&question_count=5",
+                data={"collection_id": collection_id, "title": "Agile Practice Quiz"},
+            )
+            self.assertEqual(
+                res_quiz.status_code, 200,
+                f"Quiz start failed with {res_quiz.status_code}: {res_quiz.text}"
+            )
+            quiz_data = res_quiz.json()
+            self.assertIn("session_id", quiz_data)
+            self.assertEqual(quiz_data["total_questions"], 5)
+            self.assertEqual(quiz_data["question"]["question_text"], mock_question.question_text)
+
+    def test_practice_quiz_auto_recovery_when_collection_missing(self):
+        """
+        Auto-recovery: If a collection was purged or missing, but fallback file is provided,
+        start-adaptive-quiz must automatically recover, re-persist, and start the quiz.
+        """
+        pdf_bytes = create_agile_numericals_pdf()
+        missing_cid = f"col_missing_{uuid.uuid4().hex[:8]}"
+
+        from AI_Layer.models import QuestionDraft, OptionDraft
+        mock_question = QuestionDraft(
+            question_text="Define Little's Law in Kanban.",
+            question_type="mcq",
+            difficulty="medium",
+            options=[
+                OptionDraft(text="Lead Time = WIP / Throughput", is_correct=True),
+                OptionDraft(text="Throughput = Lead Time * Velocity", is_correct=False),
+            ],
+        )
+
+        with patch("AI_Layer.ai_core.extract_concepts", new_callable=AsyncMock) as mock_extract, \
+             patch("backend.main.generate_next_question", new_callable=AsyncMock) as mock_gen_q:
+
+            mock_extract.return_value = self.mock_concepts
+            mock_gen_q.return_value = (self.mock_concepts[1], mock_question, 1)
+
+            res = self.client.post(
+                "/start-adaptive-quiz?difficulty=medium&question_count=3",
+                data={"collection_id": missing_cid, "title": "Recovered Quiz"},
+                files={"file": ("Agile Numericals.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+            )
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertIn("session_id", data)
+            # Verify the collection was restored to persistence
+            self.assertIn(missing_cid, material_collections)
+
+
 if __name__ == "__main__":
     unittest.main()
+

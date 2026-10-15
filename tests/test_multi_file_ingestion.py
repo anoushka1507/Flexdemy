@@ -89,6 +89,18 @@ class TestMultiFileIngestion(unittest.TestCase):
         material_collections.clear()
         material_chunks_cache.clear()
         material_concepts_cache.clear()
+        import shutil
+        import tempfile
+        d = os.path.join(tempfile.gettempdir(), "flexdemy_material_collections")
+        if os.path.exists(d):
+            shutil.rmtree(d, ignore_errors=True)
+
+    def tearDown(self):
+        import shutil
+        import tempfile
+        d = os.path.join(tempfile.gettempdir(), "flexdemy_material_collections")
+        if os.path.exists(d):
+            shutil.rmtree(d, ignore_errors=True)
 
     # -------------------------------------------------------------------------
     # Test 1: Uploading a PDF and PPTX together
